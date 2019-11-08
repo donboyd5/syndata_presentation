@@ -1,0 +1,604 @@
+---
+title: "Synthetic PUF presentation"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    toc: yes
+    toc_depth: 5
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+<!--
+  Enclose comments for RMD files in these kinds of opening and closing brackets
+-->
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+```{r clear_warnings, eval=FALSE}
+# run this line to clear any old warning messages
+assign("last.warning", NULL, envir = baseenv())
+
+```
+
+
+```{r system_specific_info, include=TRUE}
+# change information here as needed
+pufpath <- "C:/Users/donbo/Dropbox/OSPC - Shared/IRS_pubuse_2011/puf2011.csv"
+
+syndir <- "C:/Users/donbo/Google Drive/synpuf/syntheses/"
+
+synfn <-  "synpuf20_no_disclosures_weighted.csv"
+syndanfn <- "synpuf20calc.csv"
+synfn_td <-  "synpuf20_no_disclosures_weighted_for_taxdata.csv"
+
+
+syndrop <- "C:/Users/donbo/Dropbox/synpuf/"
+# synpath <- paste0(syndrop, synfn)
+# danpath <- paste0(syndrop, syndanfn)
+syntdpath <- paste0(syndrop, synfn_td)
+
+
+```
+
+
+```{r includes, include=FALSE}
+source(here::here("r/", "libraries.r"))
+source(here::here("r/", "functions.r"))
+
+```
+
+
+# Compare unweighted files
+```{r define_comparison_files, include=FALSE}
+puf <- read_csv(pufpath)
+glimpse(puf)
+
+syn <- read_csv(syntdpath)
+glimpse(syn)
+
+puf_vnames <- get_puf_vnames() %>% mutate(vname=str_to_upper(vname))
+
+common_names <- intersect(names(puf), names(syn))
+
+stack <- puf %>%
+  select(common_names) %>%
+  filter(RECID < 999996) %>%
+  mutate(ftype="puf") %>%
+  bind_rows(syn %>% select(common_names) %>% mutate(ftype="syn"))
+
+epvars <- names(stack)[(names(stack) %>% str_sub(., 1, 1) %in% c("E", "P"))] 
+epvars
+
+pufsums <- puf %>%
+  select(RECID, S006, epvars) %>%
+  pivot_longer(cols=-c(RECID, S006)) %>%
+  group_by(vname=name) %>%
+  summarise(wtdsumb=sum(S006 / 100 * value) / 1e9) %>%
+  left_join(puf_vnames %>% select(vname, vdesc, category)) %>%
+  mutate(category=ifelse(category=="agi", "income", category)) %>%
+  arrange(desc(wtdsumb))
+
+largeinc <- c("E00100", "E00200", "E01700", "E02000")
+largeded <- c("E19200", "E18400", "E19800", "E17500")
+
+# xcheck <- puf %>% select(RECID, MARS, starts_with("X")) %>% mutate(ftype="puf") %>%
+#   bind_rows(syn %>% select(RECID, MARS, starts_with("X")) %>% mutate(ftype="syn"))
+# 
+# xtab <- xcheck %>%
+#   filter(ftype=="puf", RECID < 999996) %>%
+#   gather(xvar, value, starts_with("X")) %>%
+#   group_by(MARS, xvar, value) %>%
+#   summarise(n=n()) %>%
+#   mutate(value=paste0("numexempt_", value)) %>%
+#   spread(value, n) %>%
+#   mutate_at(vars(starts_with("num")), list(~naz(.)))
+# xtab %>% write_csv(here::here("data", "xtab.csv"))
+# xtab %>%
+#   kable(digits=0, format.args = list(big.mark=",")) %>%
+#   kable_styling()
+
+```
+
+
+```{r wtd_sums, eval=FALSE}
+vnames <- c("E00100", "E00200")
+wsum <- function(vnames, scale=1e6) {
+  stack %>%
+    mutate(nret=1) %>%
+    select(ftype, S006, vnames) %>%
+    mutate(wt=S006 / 100) %>%
+    pivot_longer(cols=-c(ftype, wt, S006), names_to="vname", values_to = "value") %>%
+    group_by(ftype, vname) %>%
+    summarise(wtdsum=sum(value * wt) / scale) %>%
+    pivot_wider(names_from=ftype, values_from=wtdsum) %>%
+    mutate(diff=syn - puf,
+           pdiff=diff / puf * 100)
+}
+wvals <- wsum(c("nret", "E00100", "E00200", "E00300"))
+wvals %>% kable(digits=c(0, 0, 0, 0, 1),
+          format.args=list(big.mark = ',')) %>%
+  kable_styling()
+```
+
+
+## Univariate stats
+```{r univariate_stats}
+
+a <- proc.time()
+long <- stack %>%
+  select(ftype, starts_with("E"), starts_with("P"), -EIC) %>%
+  pivot_longer(cols=-ftype, names_to="vname", values_to="value") # 8.5 secs
+  # gather(vname, value, -ftype) # 4.3 secs
+b <- proc.time()
+b - a
+glimpse(long)
+
+a <- proc.time()
+stats <- long %>%
+  group_by(ftype, vname) %>%
+  summarise(n=n(),
+            n.NA=sum(is.na(value)),
+            mean=mean(value, na.rm=TRUE),
+            median=median(value, na.rm=TRUE), 
+            sd=sd(value, na.rm=TRUE),
+            kurtosis=e1071::kurtosis(value, type=2, na.rm=TRUE),
+            skewness=e1071::skewness(value, type=2, na.rm=TRUE))
+b <- proc.time() # 40 secs
+b - a
+stats %>% ht
+
+# make a wide file of statistics
+wstats <- stats %>%
+  gather(stat, value, -ftype, -vname) %>%
+  spread(ftype, value) %>%
+  mutate(stat=factor(stat, levels=c("n", "n.NA", "mean", "median", "sd", "kurtosis", "skewness"))) %>%
+  arrange(vname, stat) %>%
+  mutate(diff=syn - puf,
+         pdiff=diff / puf * 100)
+
+fstat <- function(vname.in){
+  tab <- wstats %>%
+    filter(vname==vname.in) %>%
+    kable(digits=c(0, 0, 1, 1, 1, 1),
+          format.args=list(big.mark = ',')) %>%
+    kable_styling()
+  # print(tab)
+  return(tab)
+}
+
+fstat("E00100")
+fstat("E00200")
+fstat("E00300")
+
+wstats %>%
+  mutate(diff=syn - puf,
+         pdiff=diff / puf * 100) %>%
+  kable(digits=c(0, 0, 1, 1, 1, 1),
+        format.args=list(big.mark = ','))
+# ht(wstats)
+
+```
+
+
+### Density plots
+```{r}
+
+```
+
+
+## Kernel density plots, selected variables
+```{r uvplots_kernel, include=FALSE}
+var <- "E00100"
+kdplot <- function(var, vnames=puf_vnames){
+  sq10 <- c(0, 1e3, 10e3, 25e3, 50e3, 100e3, 250e3, 500e3, 750e3, 1e6,
+            1.5e6, 2e6, 3e6, 4e6, 5e6, 10e6, 25e6, 50e6, 100e6)
+  xlabs <- scales::comma(sq10 / 1e3)
+  
+  xscale.l10 <- scale_x_log10(name=paste0(var, " in $ thousands, log 10 scale"), breaks=sq10, labels=xlabs)
+  
+  vdesc <- vnames$vdesc[vnames$vname==var]
+  
+  gtitle <- paste0("Kernel density plot for: ", vdesc, " (", var, ")")
+  
+  p <- stack %>%
+    dplyr::select(ftype, value=var) %>%
+    filter(value > 1000) %>%
+    mutate(ftype=factor(ftype, levels=c("puf", "syn"))) %>%
+    ggplot(aes(value, colour=ftype)) +
+    geom_density(size=1.5) +
+    scale_colour_manual(values=c("blue", "red")) +
+    # scale_x_continuous(name="value of variable") +
+    xscale.l10 +
+    theme_bw() +
+    ggtitle(gtitle, subtitle="Only includes values above $1,000") +
+    theme(plot.title=element_text(size=12)) +
+    theme(axis.text.x=element_text(angle=45, size=10, hjust=1, colour="black"))
+  print(p)
+  return(p)
+}
+
+```
+
+
+### Income variables, kernel density plots
+```{r uvplots_kd_income}
+p1 <- kdplot(largeinc[1])
+(p1a <- p1 + annotate("text", x=5e6, y=.45, label="AGI", size=8))
+
+p2 <- kdplot(largeinc[2])
+(p2a <- p2 + annotate("text", x=2e6, y=.5, label="Wages", size=8))
+
+p3 <- kdplot(largeinc[3])
+(p3a <- p3 + annotate("text", x=500e3, y=.6, label="Pensions", size=8))
+
+p4 <- kdplot(largeinc[4])
+(p4a <- p4 + annotate("text", x=7.5e3, y=.35, label="Schedule E\nNet income", size=8))
+
+g <- arrangeGrob(p1a, p2a, p3a, p4a, ncol=2)
+ggsave(here::here("results", "kdf_income.png"), g, width=9, height=5, scale=1.75)
+
+# kdplot(var="E00200") #, puf_vnames)
+# l_ply(incvars, kdplot)
+```
+
+
+### Deduction variables, kernel density plots
+```{r uvplots_kd_income}
+p1 <- kdplot(largeded[1])
+p1a <- p1 + annotate("text", x=250e3, y=.75, label="Interest paid", size=8)
+
+p2 <- kdplot(largeded[2])
+p2a <- p2 + annotate("text", x=1e6, y=.4, label="SALT", size=8)
+
+p3 <- kdplot(largeded[3])
+p3a <- p3 + annotate("text", x=500e3, y=.5, label="Cash\ncontributions", size=8)
+
+p4 <- kdplot(largeded[4])
+p4a <- p4 + annotate("text", x=100e3, y=1, label="Medical &\ndental", size=8)
+
+g <- arrangeGrob(p1a, p2a, p3a, p4a, ncol=2)
+ggsave(here::here("results", "kdf_deductions.png"), g, width=9, height=5, scale=1.75)
+
+# kdplot(var="E00200") #, puf_vnames)
+# l_ply(incvars, kdplot)
+```
+
+
+
+## Bivariate analysis
+### Correlations
+```{r cor_prepdat, include=FALSE}
+
+(corvars <- epvars)
+
+# create a long file with all correlations
+a <- proc.time()
+cor1 <- stack %>%
+  select(ftype, corvars) %>%
+  group_by(ftype) %>%
+  do(cordf_new(.[, -1])) %>%
+  ungroup %>%
+  select(ftype, combo, vname1, vname2, value)
+b <- proc.time()
+b - a # ~ 50 secs
+
+ht(cor1)
+count(cor1, ftype)
+
+cor1 %>%
+  filter(str_detect(combo, "E00200")) %>%
+  arrange(vname2, ftype)
+
+# create a wide file with correlation comparisons 
+# put variable names on the file
+cor.comp <- cor1 %>%
+  mutate(ftype=factor(ftype, levels=c("puf", "syn"))) %>%
+  pivot_wider(names_from=ftype, values_from = value) %>%
+  mutate(diff=syn - puf) %>%
+  left_join(puf_vnames %>% select(vname1=vname, vdesc1=vdesc)) %>%
+  left_join(puf_vnames %>% select(vname2=vname, vdesc2=vdesc))
+
+cor.comp %>%
+  filter(str_detect(combo, "E00200")) %>%
+  select(-vname1, -vname2) %>%
+  arrange(-abs(diff)) %>%
+  kable(digits=3) %>%
+  kable_styling()
+
+f <- function(df) {
+  df <- df %>%
+    filter(abs(diff) > .15 | (puf <0 & abs(diff) > .1))
+  return(df)
+}
+p <- cor.comp %>%
+  mutate(rank=rank(-abs(puf)),
+         outlier=abs(diff) > .15 | (puf <0 & abs(diff) > .1)) %>%
+  # filter(rank <= 100) %>%
+  # filter(abs(puf) > .05 | abs(syn) > .05) %>%
+  ggplot(aes(x=puf, y=syn, label=combo)) +
+  geom_point(aes(colour=outlier), size=0.4) +
+  geom_abline(slope=1, intercept=0) +
+  # geom_text(aes(label=combo), size=2, colour="darkblue", data=f) + # nudge_x=0.06, 
+  geom_text_repel(size=3, fontface = "bold", point.padding = 0.005, colour="darkblue", data=f) +
+  theme_bw() +
+  scale_colour_manual(values=c("black", "red")) +
+  scale_x_continuous(name="Correlations within PUF", limits=c(-0.2, 1), breaks=seq(-.2, 1, .2)) +
+  scale_y_continuous(name="Correlations within synthetic file", limits=c(-0.2, 1), breaks=seq(-.2, 1, .2)) +
+  geom_hline(yintercept = 0, linetype="dotted", size=0.5) +
+  geom_vline(xintercept = 0, linetype="dotted", size=0.5) +
+  coord_equal() +
+  ggtitle("Correlations of variable pairs within each file, compared across files",
+          subtitle="Selected outlier correlation pairs labeled") +
+  theme(plot.title = element_text(size = 14),
+        plot.subtitle = element_text(size = 12)) +
+  theme(legend.position = "none")
+# p
+# ggsave(here::here("results", "scatter.png"), p, width=10, height=6)
+
+
+# nov 8 ----
+# https://github.com/cran/gridExtra/blob/master/vignettes/gtable.Rmd
+# vars <- c("E00100", "E00200", "E02000", "E02100", "E07400", "E19800", "E26270", "E58990", "P23250")
+outliers <- f(cor.comp)
+(vars <- unique(c(outliers$vname1, outliers$vname2)))
+vtab <- puf_vnames %>%
+  filter(vname %in% vars) %>%
+  select(vname, vdesc) %>%
+  arrange(vname)
+vtab
+
+vtext <- paste0(vtab$vname, ": ", vtab$vdesc) %>% paste(., collapse="\n")
+vtext <- paste0("Variables included in labeled correlation pairs:\n\n", vtext)
+vtext
+
+g <- arrangeGrob(p, textGrob(vtext, just="left", x=-0.1, y=.5, gp=gpar(fontsize=8)), ncol = 2, widths = c(1.9, 1.1))
+grid.newpage(); grid.draw(g)
+ggsave(here::here("results", "scat_text.png"), g, width=9, height=5)
+
+# d <- head(iris[,1:3])
+# g <- tableGrob(d)
+# p <- qplot(1,1)
+# p2 <- qplot(3, 4)
+# 
+# grid.arrange(
+#   p,
+#   tableGrob(mtcars[1:4, 1:4]),
+#   ncol = 2,
+#   widths = c(2, 1),
+#   clip = FALSE
+# )
+# 
+# # let's make it 5 rows with the plot taking all 3, and 3 columns with the plot taking 2 of the 3
+# vtab2 <- vtab %>% mutate(cell=paste0(vname, ": ", vdesc)) %>% select(cell)
+# size <- 0.75
+# ttheme_tab <- ttheme_minimal(
+#     core = list(fg_params=list(cex = size, hjust=0)), # cell size g_params=list(hjust=1, x=0.9)
+#     colhead = list(fg_params=list(cex = size)), # colhead text size
+#     rowhead = list(fg_params=list(cex = size)))
+# layout <- rbind(c(1, 1, NA, NA),
+#                 c(1, 1, NA, NA),
+#                 c(1, 1, NA, 2),
+#                 c(1, 1, NA, NA),
+#                 c(1, 1, NA, NA))
+# g <- arrangeGrob(p, tableGrob(vtab2, rows=NULL, theme=ttheme_tab),
+#             ncol = 2,
+#             clip = FALSE,
+#             layout_matrix=layout)
+# g
+# grid.newpage(); grid.draw(g)
+# ggsave(here::here("results", "scat_tab.png"), g, width=10, height=6)
+# # clip "on", "off" or "inherit"
+# 
+# grid.arrange(p, textGrob(vtext, just="left", x=0.01, y=.5, gp=gpar(fontsize=8)), ncol = 2, widths = c(2, 1.5))
+# grid.arrange(p, textGrob(vtext, just="left", x=0.5, y=.5, gp=gpar(fontsize=8)), ncol = 1, heights = c(2, 1))
+# 
+# grid.arrange(p, textGrob(vtext, just=c(0, 0), x=0, y=0, gp=gpar(fontsize=12)), ncol = 2, layout_matrix=layout, clip = "off")
+# 
+# vt2 <- vtab %>% mutate(cell=paste0(vname, ": ", vdesc))
+# # https://cran.r-project.org/web/packages/gridExtra/vignettes/tableGrob.html
+# t <- textGrob("E00100\nE00200")
+# grid.arrange(p, textGrob(vtext, just=c(0, 0)), ncol = 2, widths = c(2, 1), clip="inherit")
+# 
+# size <- .5
+# vt2 <- vtab %>% mutate(cell=paste0(vname, ": ", vdesc))
+# ttheme_tab <- ttheme_minimal(
+#     core = list(fg_params=list(cex = size, hjust=0)), # cell size g_params=list(hjust=1, x=0.9)
+#     colhead = list(fg_params=list(cex = size)), # colhead text size
+#     rowhead = list(fg_params=list(cex = size)))
+# grid.arrange(p, tableGrob(vt2 %>% select(cell), rows=NULL, theme = ttheme_tab), ncol = 2, widths = c(2, 1), clip = "off")
+# 
+# 
+# size <- .5
+# mytheme <- gridExtra::ttheme_default(
+#     core = list(fg_params=list(cex = size)), # cell size
+#     colhead = list(fg_params=list(cex = size)), # colhead text size
+#     rowhead = list(fg_params=list(cex = size)))
+# 
+# myt <- tableGrob(mtcars[1:5, 1:5], theme = mytheme)
+# 
+# grid.newpage()
+# grid.draw(myt)
+# 
+# 
+# p1 <- ggplot(mtcars, aes(mpg, wt, colour = factor(cyl))) +
+#   geom_point()+ theme_article() + theme(legend.position = 'top') 
+# p2 <- ggplot(mtcars, aes(mpg, wt, colour = factor(cyl))) +
+#   geom_point() + facet_wrap(~ cyl, ncol = 2, scales = "free") +
+#   guides(colour = "none") +
+#   theme_article()
+#   
+# ggarrange(p1, p2, widths = c(1.5,2))
+# 
+# 
+# grid.newpage()
+# x <- stats::runif(20)
+# y <- stats::runif(20)
+# rot <- stats::runif(20, 0, 360)
+# grid.text("SOMETHING NICE AND BIG", x=x, y=y, rot=rot,
+#           gp=gpar(fontsize=20, col="grey"))
+# grid.text("SOMETHING NICE AND BIG", x=x, y=y, rot=rot,
+#           gp=gpar(fontsize=20), check=TRUE)
+# grid.newpage()
+# draw.text <- function(just, i, j) {
+#   grid.text("ABCD", x=x[j], y=y[i], just=just)
+#   grid.text(deparse(substitute(just)), x=x[j], y=y[i] + unit(2, "lines"),
+#             gp=gpar(col="grey", fontsize=8))
+# }
+# x <- unit(1:4/5, "npc")
+# y <- unit(1:4/5, "npc")
+# grid.grill(h=y, v=x, gp=gpar(col="grey"))
+# draw.text(c("bottom"), 1, 1)
+# 
+# 
+# d <- head(iris[,1:3])
+# g <- tableGrob(d)
+# grid.newpage()
+# grid.draw(g)
+# 
+# q <- grid.arrange(p, g,
+#                   nrow=2,
+#                   ncol=1,
+#                   as.table=TRUE,
+#                   heights=c(4, 4),
+#                   widths=c(5, 1), respect=FALSE)
+# 
+# q
+# ## non-interactive use, multipage pdf
+# ggsave(here::here("results", "scatter3.png"), q)
+# 
+# a <- gtable(widths=unit(1:3, c("cm")), 
+#             heights=unit(5, "cm"))
+# 
+# a <- gtable(widths=unit(c(4, 1), c("in")), 
+#             heights=unit(5, "in"))
+# a
+# gtable_show_layout(a)
+# 
+# rect <- rectGrob(gp = gpar(fill = "black"))
+# a <- gtable_add_grob(a, p, 1, 1)
+# a
+# plot(a)
+# 
+# ggsave(here::here("results", "scatter4.png"), a)
+# 
+# p <- qplot(1,1)
+# p2 <- qplot(3, 4)
+# r <- rectGrob(gp=gpar(fill="grey90"))
+# t <- textGrob("text")
+# grid.arrange(t, p, p2, r, ncol=2)
+# 
+# 
+# d <- head(iris[,1:3])
+# g <- tableGrob(d)
+# p <- qplot(1,1)
+# p2 <- qplot(3, 4)
+# r <- rectGrob(gp=gpar(fill="grey90"))
+# t <- textGrob("text")
+# grid.arrange(g, p, p2, r, ncol=2)
+# 
+# tmp <- grid.arrange(p, g, ncol=2)
+# grid.arrange(p, g, ncol=2, widths=unit(c(7, .5), c("in")), respect=TRUE, clip = "off")
+# # plot(tmp)
+# a <- gtable(widths=unit(c(4, 1), c("in")), 
+#             heights=unit(5, "in"))
+# a
+# plot(a)
+# gtable_show_layout(a)
+# a <- gtable_add_grob(a, p, 1, 1)
+# a
+# plot(a)
+# 
+# # Transform to a ggplot and print
+# library(gridExtra)
+# library(ggpubr)
+# gt <- arrangeGrob(p, g, ncol = 2, widths=unit(c(7, 1), c("in")))
+# q <- as_ggplot(gt)
+# q
+# ggsave(here::here("results", "scatter5.png"), q)
+# 
+# 
+# 
+# # Move to a new page
+# d <- head(iris[ , 1:2])
+# g <- tableGrob(d, rows=NULL)
+# q2 <- as_ggplot(g)
+# q2
+# 
+# grid.newpage()
+# # Create layout : nrow = 2, ncol = 2
+# pushViewport(viewport(layout = grid.layout(2, 2)))
+# # A helper function to define a region on the layout
+# # define_region <- function(row, col){
+# #   viewport(layout.pos.row = row, layout.pos.col = col, ...)
+# # } 
+# define_region <- function(row, col, iwidth){
+#   viewport(layout.pos.row = row, layout.pos.col = col, width=unit(iwidth, "in"))
+# } 
+# # Arrange the plots
+# print(p, vp=define_region(1:2, 1, iwidth=5))
+# print(q2, vp = define_region(1, 2, iwidth=1))
+# # print(ydensity, vp = define_region(2, 2))
+# 
+# 
+# print(scatterPlot, vp=define_region(1, 1:2))
+# print(xdensity, vp = define_region(2, 1))
+# print(ydensity, vp = define_region(2, 2))
+# 
+# layout(matrix(c(1, 2, 1, 3), ncol=2, byrow=TRUE), widths=c(2, 1))
+# ta <- do.call(arrangeGrob, list(p,q2))
+# vp <- viewport(height=unit(1, "npc"), width=unit(0.33, "npc"), 
+#                just="right", x=1, y=0.5)
+# print(ta, vp=vp)
+# # https://stackoverflow.com/questions/14358526/controlling-column-widths-for-side-by-side-base-graphic-and-ggplot2-graphic
+# 
+# 
+# layout <- rbind(c(1, 1, 1, 1),
+#                 c(2, 2, 3, 3),
+#                 c(2, 2, 4, 4))
+# grid.arrange(grob1, grob2, grob3, grob4, layout_matrix=layout)
+# 
+# layout <- rbind(c(1, 2))
+# grid.arrange(p, q2, layout_matrix=layout, widths = unit(c(3, 1), "in"))
+# 
+# grid.arrange(p, q2, layout_matrix=layout, widths = unit(c(0.6, .05), "null"))
+# 
+# tmp <- arrangeGrob(p, q2, layout_matrix=layout, widths = unit(c(3, 1), "in"))
+# grid.show(tmp)
+# 
+# # All cells are of equal size by default, but users may pass explicity widths and/or heights
+# # in any valid grid units, or as relative numbers (interpreted as null),
+# # grid.arrange(grobs=gs[1:3], ncol=2, widths = 1:2, 
+# #              heights=unit(c(1,10), c("in", "mm")))
+# grid.arrange(grobs=c(p, q2), ncol=2, widths = 2:1)
+# 
+# 
+# # combine both plots (last should really be "pmax", it's an unfortunate bug)
+# g2 <- gtable:::rbind_gtable(p, q2, "last")
+# 
+# # locate the panels in the gtable layout
+# panels <- g2$layout$t[grepl("panel", g2$layout$name)]
+# # assign new (relative) heights to the panels, based on the number of breaks
+# n1 <- 2; n2 <- 2
+# g2$widths[panels] <- list(unit(n1*2,"null"), unit(n2, "null")) 
+# # notice the *2 here to get different heights 
+# grid.newpage()
+# grid.draw(g2)
+# 
+# don <- ggarrange(p, g, ncol = 2, nrow = 1, widths=c(2, 1), heights=c(1))
+# don
+# ggsave(here::here("results", "scatter6.png"), don, width=6, height=4)
+# 
+# layout <- rbind(c(1, 1, 1, 1, NA, 2),
+#                 c(1, 1, 1, 1, NA, 2))
+# grid.arrange(p, q2, layout_matrix=layout)
+
+```
+
+
