@@ -15,9 +15,14 @@ library("hms") # hms, for times
 library("lubridate") # lubridate, for date/times
 library("vctrs")
 
+library("btools")
+
 # tables
 library("knitr")
 library("kableExtra")
+
+library("flextable")
+# library(officer)
 
 # graphics
 library("grDevices")

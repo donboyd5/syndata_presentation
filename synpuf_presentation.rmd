@@ -1,5 +1,6 @@
 ---
 title: "Synthetic PUF presentation"
+author: Don Boyd
 date: "`r format(Sys.time(), '%B %d, %Y')`"
 output:
   html_notebook: 
@@ -8,12 +9,14 @@ output:
     toc_depth: 5
     number_sections: true
 editor_options: 
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 <!--
   Enclose comments for RMD files in these kinds of opening and closing brackets
 -->
+
+**CAUTION: Remember to read tax data files with default column type of double to avoid loss of precision.**
 
 
 ```{r setup, include=FALSE}
@@ -44,6 +47,7 @@ syndrop <- "C:/Users/donbo/Dropbox/synpuf/"
 # danpath <- paste0(syndrop, syndanfn)
 syntdpath <- paste0(syndrop, synfn_td)
 
+taxout <- "D:/tax_data/"
 
 ```
 
@@ -129,6 +133,7 @@ wvals %>% kable(digits=c(0, 0, 0, 0, 1),
 
 
 ## Univariate stats
+
 ```{r univariate_stats}
 
 a <- proc.time()
@@ -176,6 +181,7 @@ fstat <- function(vname.in){
 fstat("E00100")
 fstat("E00200")
 fstat("E00300")
+fstat("E01500")
 
 wstats %>%
   mutate(diff=syn - puf,
@@ -189,6 +195,25 @@ wstats %>%
 
 ### Density plots
 ```{r}
+var <- "E00100"
+p <- stack %>%
+  dplyr::select(ftype, value=var) %>%
+  filter(value > 1000) %>%
+  mutate(grp=cut(value, breaks=c(-Inf, 0, 10e3, 25e3, 50e3, 75e3, 100e3, 250e3, 1e6, 10e6, Inf)),
+         ftype=factor(ftype, levels=c("puf", "syn"))) %>%
+  ggplot(aes(value, colour=ftype)) +
+  geom_density(size=1.5) +
+  scale_colour_manual(values=c("blue", "red")) +
+  # scale_x_continuous(name="value of variable") +
+  # xscale.l10 +
+  theme_bw() +
+  ggtitle(var, subtitle="Only includes values above $1,000") +
+  theme(plot.title=element_text(size=12)) +
+  theme(axis.text.x=element_text(angle=45, size=10, hjust=1, colour="black")) +
+  facet_wrap(~grp, ncol=3, scales="free")
+p
+
+qqnorm(stack$E00100[stack$ftype=="puf"])
 
 ```
 
@@ -250,7 +275,7 @@ ggsave(here::here("results", "kdf_income.png"), g, width=9, height=5, scale=1.75
 
 
 ### Deduction variables, kernel density plots
-```{r uvplots_kd_income}
+```{r uvplots_kd_deduct}
 p1 <- kdplot(largeded[1])
 p1a <- p1 + annotate("text", x=250e3, y=.75, label="Interest paid", size=8)
 
@@ -270,6 +295,350 @@ ggsave(here::here("results", "kdf_deductions.png"), g, width=9, height=5, scale=
 # l_ply(incvars, kdplot)
 ```
 
+
+### Distribution similarity
+```{r}
+glimpse(stack)
+ns(stack)
+glimpse(long)
+count(long, vname)
+
+# get the puf relative frequencies
+ngroups <- 100
+rfreq_puf <- long %>%
+  filter(ftype=="puf") %>%
+  # filter(vname %in% c("E00100", "E00200")) %>%
+  group_by(vname) %>%
+  mutate(grp=ntile(value, ngroups)) %>%
+  group_by(vname, grp) %>%
+  summarise(n=n(), minval=min(value), maxval=max(value))
+
+rfreq_puf %>% filter(vname=="E00100") %>% ht
+
+# add breakpoints to the file
+rfreq_pufbrk <- rfreq_puf %>%
+  group_by(vname) %>%
+  mutate(lower=ifelse(row_number()==1,
+                      -Inf, 
+                      (minval + lag(maxval)) /2),
+         upper=ifelse(row_number()==n(),
+                      Inf, (maxval + lead(minval)) / 2))
+
+rfreq_pufbrk %>% filter(vname=="E00200") %>% ht
+
+# make unique groups
+pufgroups <- rfreq_pufbrk %>%
+  group_by(vname, lower) %>%
+  summarise(n=sum(n), upper=max(upper)) %>%
+  group_by(vname) %>%
+  # arrange(lower) %>%
+  mutate(rfreq=n / sum(n)) %>%
+  # ungroup %>%
+  mutate(groupnum=rank(lower)) %>%
+  select(vname, groupnum, lower, upper, n, rfreq)
+
+# mutate(groupnum=group_indices(.dots="lower"))
+
+pufgroups %>%
+  group_by(vname) %>%
+  filter(rfreq > .015)
+# wages has 20% of obs in one group
+
+
+```
+
+```{r djb}
+# now that we have pufgroups we can compute syn relative frequencies for the same groups
+# and see how they compare
+df <- long %>%
+  filter(ftype=="syn") %>%
+  filter(vname %in% c("E00100", "E00200")[2])
+
+i<-20; df$value[i]; df$valgroup[i] %>% as.character(); df$binnum[i]
+tmp <- pufgroups %>% filter(vname=="E00200")
+
+ht(brks)
+cut(c(-100, 0, 1, 1000, 3.114e6, 4e6, Inf), brks, include.lowest = TRUE, right=FALSE)
+
+getbin <- function(df){
+  brks <- c(-Inf, pufgroups$upper[pufgroups$vname==df$vname[1]])
+  df$valgroup <- cut(df$value, brks, include.lowest = TRUE)
+  df$binnum <- as.integer(df$valgroup)
+  df$valgroup <- as.character(df$valgroup) # factors don't work once we combine with other variables with different levels
+  return(df)
+}
+
+rfreq_syn <- long %>%
+  filter(ftype=="syn") %>%
+  filter(vname %in% c("E00100", "E00200")[2]) %>%
+  group_by(vname) %>%
+  do(getbin(.))
+
+
+
+# determine the bin for each observation
+a <- proc.time()
+bindat <- stack %>%
+  # sample_n(100) %>%
+  dplyr::select(ftype, binvars) %>%
+  gather(vname, value, -ftype) %>%
+  group_by(ftype, vname) %>%
+  do(getbin(.)) %>%
+  ungroup %>%
+  arrange(ftype, vname, binnum)
+b <- proc.time()
+b - a # 2-3 minutes
+
+# collapse by ftype, vname, and bin
+binned <- bindat %>%
+  group_by(ftype, vname) %>%
+  mutate(ntot=n()) %>%
+  group_by(ftype, vname, binnum, valgroup) %>%
+  summarise(n=n(), ntot=first(ntot)) %>%
+  mutate(pct=n / ntot * 100)
+
+# get ssd by ftype, vname
+a <- proc.time()
+bincomp <- binned %>%
+  group_by(vname, binnum, valgroup) %>%
+  mutate(diff=pct - pct[ftype=="puf"],
+         diffsq=diff^2) %>%
+  group_by(ftype, vname) %>%
+  summarise(ssd=sum(diffsq)) %>%
+  filter(ftype!="puf")
+b <- proc.time()
+b - a
+
+
+
+
+
+
+# play below here ----
+
+tmp <- density(stack %>% mutate(value=E00650) %>% filter(ftype=="puf", value>0) %>% mutate(value=log(value)) %>% .[["value"]])
+# str(tmp)
+tibble(x=tmp$x, y=tmp$y) %>%
+  ggplot(aes(x, y)) +
+  geom_line()
+
+df <- stack
+vname <- "E00200"
+
+den <- function(df, vname.in){
+  # df is a long data file
+  npoints <- 512
+  
+  pufvals <- df %>% filter(ftype=="puf", vname==vname.in) %>% .[["value"]]
+  pufmin <- min(pufvals)
+  pufmax <- max(pufvals)
+  synvals <- df %>% filter(ftype=="syn", vname==vname.in) %>% .[["value"]]
+  
+  if(length(pufvals) < 10 | length(synvals) < 10) {
+    return(tibble(i=1:npoints, x=NA, puf=NA, syn=NA))
+  }
+  pufden <- density(pufvals, from=pufmin, to=pufmax, n=npoints)
+  synden <- density(synvals, from=pufmin, to=pufmax, n=npoints)
+  
+  dendf <- tibble(i=1:npoints, x=pufden$x, puf=pufden$y, syn=synden$y)
+  return(dendf)
+}
+tmp <- den(long, "E00200")
+
+tmp <- long %>%
+  # filter(vname=="E00200") %>%
+  group_by(vname) %>%
+  do(den(., .$vname))
+
+tmp %>%
+  select(x, puf, syn) %>%
+  mutate(ygrp=cut(x, 8)) %>% 
+  gather(ftype, den, puf, syn) %>%
+  # filter(pufx < 100e3) %>%
+  ggplot(aes(x, den, colour=ftype)) + geom_line() + facet_wrap(~ygrp, ncol=2, scales="free")
+
+tmp %>%
+  select(x, puf, syn) %>%
+  mutate(ygrp=cut(x, 4)) %>% 
+  gather(ftype, den, puf, syn) %>%
+  # filter(pufx < 100e3) %>%
+  ggplot(aes(x, den, colour=ftype)) + geom_line()
+
+glimpse(tmp)
+tmp %>%
+  group_by(vname) %>%
+  summarise(dist=sum((puf - syn)^2) %>% sqrt) %>%
+  arrange(-dist) %>%
+  left_join(pufsums %>% select(vname, wtdsumb, vdesc)) %>%
+  kable(digits=4)
+
+
+# library(overlapping)
+set.seed(20150605)
+# overlap(x, nbins = 1000, plot = FALSE, partial.plot = FALSE)
+x <- list(X1=rnorm(100),X2=rt(50,8),X3=rchisq(80,2))
+out <- overlap(x, plot=TRUE)
+
+
+
+x <- list(X1=rnorm(100),X2=rt(50,8),X3=rchisq(80,2))
+var <- "E00100"
+x <- list(puf=stack %>% filter(ftype=="puf") %>% .[[var]],
+          syn=stack %>% filter(ftype=="syn") %>% .[[var]])
+
+x <- list(puf=stack %>% select(ftype, value=var) %>% 
+            filter(ftype=="puf", value>0) %>% mutate(value=log(value)) %>% .[["value"]],
+          syn=stack %>% select(ftype, value=var) %>% 
+            filter(ftype=="syn", value>0) %>% mutate(value=log(value)) %>%  .[["value"]])
+
+out <- overlap(x, plot=TRUE)
+str(out)
+out$OV
+unname(out$OV)
+
+olap <- function(df, vname.in){
+  print(vname.in[1])
+  pufvals <- df %>% filter(ftype=="puf", vname==vname.in[1]) %>% .[["value"]]
+  synvals <- df %>% filter(ftype=="syn", vname==vname.in[1]) %>% .[["value"]]
+  x <- list(puf=pufvals,
+            syn=synvals)
+  out <- overlap(x)
+  # print(str(out))
+  return(out$OV %>% unname)
+}
+glimpse(long)
+tmp2 <- long %>%
+  # filter(vname=="E00200") %>%
+  filter(vname %in% c("E00100", "E00200")) %>%
+  group_by(vname) %>%
+  summarise(olap=olap(., .$vname))
+tmp2
+
+olap <- function(df){
+  print(df[1, ])
+  vname.in <- df$vname[1]
+  print(vname.in)
+  pufvals <- df %>% filter(ftype=="puf", vname==vname.in) %>% .[["value"]]
+  synvals <- df %>% filter(ftype=="syn", vname==vname.in) %>% .[["value"]]
+  x <- list(puf=pufvals,
+            syn=synvals)
+  out <- overlap(x)
+  return(out$OV %>% unname)
+}
+tmp2 <- long %>%
+  # filter(vname=="E00200") %>%
+  filter(vname %in% c("E00100", "E00200")) %>%
+  group_by(vname) %>%
+  summarise(opct=olap(.))
+tmp2
+
+olap1 <- function(df){
+  vname.in <- df$vname[1]
+  
+  pufvals <- df %>% filter(ftype=="puf", vname==vname.in) %>% .[["value"]]
+  synvals <- df %>% filter(ftype=="syn", vname==vname.in) %>% .[["value"]]
+  
+  pufvals_nz <- pufvals[pufvals != 0]
+  synvals_nz <- synvals[synvals != 0]
+
+  
+  x <- list(puf=pufvals,
+            syn=synvals)
+  olap_all <- overlap(x)
+  
+  xnz <- list(puf=pufvals_nz,
+            syn=synvals_nz)
+  olap_nz <- overlap(xnz)
+  
+
+  df <- tibble(opct_all=olap_all$OV, 
+               opct_nz=olap_nz$OV, 
+               puf_nzpct=length(pufvals_nz) / length(pufvals),
+               syn_nzpct=length(synvals_nz) / length(synvals))
+  return(df)
+}
+
+olap2 <- function(df){
+  vname.in <- df$vname[1]
+  
+  pufvals <- df %>% filter(ftype=="puf", vname==vname.in) %>% .[["value"]]
+  synvals <- df %>% filter(ftype=="syn", vname==vname.in) %>% .[["value"]]
+  
+  pufvals_gz <- pufvals[pufvals > 0]
+  synvals_gz <- synvals[synvals > 0]
+
+  
+  x <- list(puf=pufvals,
+            syn=synvals)
+  olap_all <- overlap(x)
+  
+  xgz <- list(puf=pufvals_gz,
+            syn=synvals_gz)
+  olap_gz <- overlap(xgz)
+  
+  xlgz <- list(puf=pufvals_gz %>% log(),
+            syn=synvals_gz %>% log())
+  olap_lgz <- overlap(xlgz)
+  
+
+  df <- tibble(opct_all=olap_all$OV, 
+               opct_gz=olap_gz$OV,
+               opct_lgz=olap_lgz$OV, 
+               puf_gpct=length(pufvals_gz) / length(pufvals),
+               syn_gzpct=length(synvals_gz) / length(synvals))
+  return(df)
+}
+
+tmp2 <- long %>%
+  # filter(vname=="E00200") %>%
+  # filter(vname %in% c("E00100", "E00200")) %>%
+  group_by(vname) %>%
+  do(olap2(.))
+
+tmp3 <- tmp2 %>%
+  ungroup %>%
+  mutate(ropct_all=rank(opct_all),
+         ropct_gz=rank(opct_gz),
+         ropct_lgz=rank(opct_lgz)) %>%
+  left_join(pufsums %>% select(vname, wtdsumb, vdesc))
+
+tmp2 %>% 
+  arrange(-opct_lgz) %>%
+  left_join(pufsums %>% select(vname, wtdsumb, vdesc)) %>%
+  ht(10) %>%
+  kable(digits=3) %>%
+  kable_styling()
+
+tmp2 %>% 
+  arrange(opct_nz) %>%
+  left_join(pufsums %>% select(vname, wtdsumb, vdesc)) %>%
+  kable(digits=3) %>%
+  kable_styling()
+
+tmp2 %>%
+  ggplot(aes(puf_nzpct, syn_nzpct)) + geom_point()
+
+tmp2 %>%
+  ggplot(aes(opct_all, opct_nz)) + geom_point()
+
+tmp2 %>%
+  mutate(pctdiff=opct_nz - opct_all) %>%
+  ggplot(aes(puf_nzpct, pctdiff)) + geom_point()
+
+# why so little overlap with E02000?
+# E02000	0.000	0.699	0.344	0.381	480.567	Schedule E net income or loss (+/-)
+
+# d <- long %>%
+#   filter(vname=="E02100") %>%
+#   group_by(ftype) %>%
+#   summarise(nz=sum(value!=0))
+
+# best E02100 Schedule F net profit/loss (+/-)
+# worst E02000 Schedule E net income or loss (+/-)
+
+
+
+```
 
 
 ## Bivariate analysis
@@ -601,4 +970,267 @@ ggsave(here::here("results", "scat_text.png"), g, width=9, height=5)
 
 ```
 
+
+
+## Worst correlation differences
+```{r cor_worst}
+
+
+tab <- cor.comp %>%
+  arrange(desc(abs(diff))) %>%
+  select(-vname1, -vname2) %>%
+  rename(variable_pair=combo, PUF=puf, variable1=vdesc1, variable2=vdesc2) %>%
+  # filter(abs(diff)>=.1)
+  head(10) 
+
+tab %>%
+  kable(digits=3) %>%
+  kable_styling(full_width = FALSE)
+
+vw <- 25
+ft <- tab %>%
+  mutate(variable1=str_wrap(variable1, width=vw),
+         variable2=str_wrap(variable2, width=vw)) %>%
+  flextable() %>% 
+  set_header_labels(variable_pair="Variable pair",
+                    PUF = "PUF\ncorrelation",
+                    syn = "Synthetic\ncorrelation",
+                    diff="Difference",
+                    variable1="Variable 1",
+                    variable2="Variable 2") %>%
+  theme_box() %>%
+  autofit() %>% # dim
+  width(j=~variable1 + variable2, width=3)
+ft
+dim(ft)
+save_as_image(ft, path = here::here("results", "corr_worst_table.png"))
+save_as_image(ft, path = here::here("results", "corr_worst_table7.png"), zoom=7)
+save_as_image(ft, path = here::here("results", "corr_worst_table10.png"), zoom=10)
+save_as_image(ft, path = here::here("results", "corr_worst_table.pdf"))
+# browseVignettes(package = "flextable")
+# myft <- flextable(
+#   head(mtcars), 
+#   col_keys = c("am", "carb", "gear", "mpg", "drat" ))
+# myft
+# myft <- theme_vanilla(myft)
+# myft theme_zebra
+tab %>%
+  flextable() %>% 
+  theme_box() %>%
+  autofit()
+
+```
+
+
+# Examine weighted enhanced files
+## Temporary work with puf and syn
+```{r}
+glimpse(stack)
+ns(stack)
+count(stack, ftype, XOCAH)
+
+stack2 <- stack %>%
+  setNames(change_case(names(.))) %>% # Tax-Calculator expects mostly lower-case names
+  do(impose_variable_rules(.)) %>% # not needed for synpuf5 and later
+  do(prime_spouse_splits(.)) %>%
+  arrange(ftype) %>% # DJB NEW!
+  mutate(RECID_original=RECID,
+         RECID=row_number()) # WILL OVERWRITE OLD RECID!!!!
+
+glimpse(stack2)
+
+set.seed(1234)
+slim <- 
+  stack2 %>%
+  group_by(ftype) %>%
+  sample_n(10e3)
+
+stack2 %>% write_csv(paste0(taxout, "tcbase.csv"))
+slim %>% write_csv(paste0(taxout, "tcbase_slim.csv"))
+
+# use one of these
+stackpath <- "D:/tax_data/tcbase.csv"
+stackpath <- "D:/tax_data/tcbase_slim.csv"
+
+cmd1 <- "C:/ProgramData/Anaconda3/Scripts/tc"
+args <- c(shQuote(stackpath), "2018",
+          "--dump",
+          "--outdir", taxout)
+cmd1
+args
+
+#.. run the command ----
+a <- proc.time()
+system2(cmd1, args) # CAUTION: this will overwrite any existing output file that had same input filename!
+# consider system2
+b <- proc.time()
+b - a  # it can easily take 5-10 minutes depending on the size of the input file
+
+
+
+
+  
+
+```
+
+
+
+
+## Create comparable data
+```{r notes, eval=FALSE}
+# Nov 7 2019 email from Yimeng:
+
+# I have put the files you requested in the shared dropbox folder SLGF\taxdata_synpuf.
+# (I am not authorized to write in the folder you shared the synthetic puf files)
+# There are six files
+# 
+# (1). cps-matched-puf.csv: the original puf file without any modifications. 
+# (2). puf_weights_CVXOPT_puf.csv.gz, weights solved with all constraints, using (1) as input. 
+# 
+# (3) cps-matched-puf_synpuf.csv, synthetic puf, with all 'XO***' variables set to value 1. 
+# (4) puf_weights_CVXOPT_synpuf.csv.gz: weights solved with the constraint "dependent_exempt_num " removed, using (3) as input
+# 
+# (5) cps-matched-puf_rottenpuf.csv: the original puf file "rotten" the same way as the synthetic puf. Following modifications are made of puf2011.csv before going through the matching process:
+#     puf['xocah']  = 1
+#     puf['xocawh'] = 1
+#     puf['xoodep'] = 1
+#     puf['xopar']  = 1
+#     puf['e03260'] = 0  (values are all zero in synthetic puf)
+# (6) puf_weights_CVXOPT_rottenpuf.csv.gz: weights solved with the constraint "dependent_exempt_num " removed, using (6) as input
+# 
+# Weights for all years are included. The flies for weights are compressed (.gz) and you need to unzip them before using. (Can be unzipped by 7-zip, the gunzip function in R.utils package can also do it)
+
+# DJB note 11/9/2019: the description above is not quite accurate. The files that Yimeng calls "original" are the enhanced versions
+# after having been run through TaxData. This is what we want.
+
+```
+
+
+```{r name_defs, include=FALSE}
+edir <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/"
+
+ep_rotten <- "cps-matched-puf_rottenpuf.csv" # the true PUF as enhanced, with "rotten" features added
+ep_weights_gz <- "puf_weights_CVXOPT_rottenpuf.csv.gz" # weights for above
+ep_weights <- "puf_weights_CVXOPT_rottenpuf.csv" # weights for above
+#              puf_weights_CVXOPT_rottenpuf.csv.gz
+
+es_rotten <- "cps-matched-puf_synpuf.csv"  # the synpuf rotten as is (with X) values set to 1
+es_weights_gz <- "puf_weights_CVXOPT_synpuf.csv.gz" # weights for above
+es_weights <- "puf_weights_CVXOPT_synpuf.csv" # weights for above
+
+
+eptruefn <- "puf_true_input_for_tc.csv" # the true input for tc -- in the taxout directory
+
+```
+
+
+```{r get_enhanced, include=FALSE}
+eptrue <- read_csv(paste0(taxout, eptruefn))
+# ,                         col_types = cols(.default= col_double()),                         n_max=-1)
+glimpse(eptrue)
+
+# get TaxData-enhanced data files
+epuf <- read_csv(paste0(edir, ep_rotten),
+                         col_types = cols(.default= col_double()),
+                         n_max=-1)
+
+ns(epuf)
+
+nrow(eptrue); nrow(epuf)
+ncol(eptrue); ncol(epuf)
+ns(eptrue)
+
+
+esyn <- read_csv(paste0(edir, es_rotten),
+                         col_types = cols(.default= col_double()),
+                         n_max=-1)
+ns(esyn)
+nrow(esyn); ncol(esyn)
+
+# check names
+setdiff(names(epuf), names(esyn)) # "f8867"  "f8949"  "e59720" "e11601" "e11602" "e11603" "e25550"
+setdiff(names(esyn), names(epuf)) # none
+puf_not_syn <- c("f8867", "f8949", "e59720", "e11601", "e11602", "e11603", "e25550")
+rotten_vars <- c("e03260", "xocah", "xocawh", "xoodep", "xopar")
+
+puf_vnames %>%
+  filter(vname %in% str_to_upper(puf_not_syn)) %>%
+  select(-vnum)
+
+puf_vnames %>%
+  filter(vname %in% str_to_upper(rotten_vars)) %>%
+  select(-vnum)
+
+# variables that are in the puf but not in our data -- plus e32670
+# vname vdesc category
+# E11601	Total Refundable Credits Used to Offset Income Tax Before Credits	payments		
+# E11602	Total Refundable Credits Used to Offset All Other Taxes	payments		
+# E11603	Total Refundable Credits Refundable Parts	payments		
+# E25550	Total Depreciation and Depletion of all Property	schedE		
+# E59720	EIC refundable portion	payments	
+# F8867	Form 8867, Paid Preparer’s Earned Income Credit Checklist	manual		
+# F8949	Form 8949, Sales and Other Dispositions of Capital Assets	manual	
+
+# "Rotten" variables -- not synthesized
+# vname vdesc category
+# E03260	Deduction for self-employment tax	stat_adjust		
+# XOCAH	Exemptions for Children Living at Home	manual		
+# XOCAWH	Exemptions for Children Living Away from Home	manual		
+# XOODEP	Exemptions for Other Dependents	manual		
+# XOPAR	Exemptions for Parents Living at Home or Away from Home	manual	
+
+```
+
+```{r get_weights, include=FALSE}
+library("R.utils")
+
+# the PUF weights (rotten)
+epz <- gzfile(paste0(edir, ep_weights_gz), open="rb")  
+epw <- read_csv(file=epz, col_types = cols(.default= col_double()))
+glimpse(epw)
+
+# the synthetic file weights (rotten)
+esz <- gzfile(paste0(edir, es_weights_gz), open="rb")  
+esw <- read_csv(file=esz, col_types = cols(.default= col_double()))
+glimpse(esw)
+
+```
+
+
+```{r test_tc, include=FALSE}
+# Tax-Calculator user guide:
+# https://pslmodels.github.io/Tax-Calculator/uguide.html
+
+# Use system2 command: here is an example:
+# cmd1 <- "C:/Users/donbo/Anaconda3/Scripts/tc"
+# args <- c("D:/tcdir/synth10syn20.csv", "2013", 
+#           "--reform", "D:/Dropbox/RPrograms PC/OSPC/syndata4/tax_plans/brk4_1k_2013.json", 
+#           "--dump", 
+#           "--outdir", "D:/tcdir/")
+# system2(cmd1, args)
+
+# Do not include --reform and its location if this is a baseline run
+
+# paste0(edir, ep_rotten)
+# "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/cps-matched-puf_rottenpuf.csv"
+eprpath <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/cps-matched-puf_rottenpuf.csv" # rotten input
+
+taxout <- "D:/tax_data/"
+eptpath <- "D:/tax_data/puf_true_input_for_tc.csv" # the true puf input
+
+cmd1 <- "C:/ProgramData/Anaconda3/Scripts/tc"
+args <- c(shQuote(eptpath), "2018",
+          "--dump",
+          "--outdir", taxout)
+cmd1
+args
+
+#.. run the command ----
+a <- proc.time()
+system2(cmd1, args) # CAUTION: this will overwrite any existing output file that had same input filename!
+# consider system2
+b <- proc.time()
+b - a  # it can easily take 5-10 minutes depending on the size of the input file
+
+```
 
