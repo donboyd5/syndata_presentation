@@ -9,7 +9,7 @@ output:
     toc_depth: 5
     number_sections: true
 editor_options: 
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 <!--
@@ -47,7 +47,16 @@ syndrop <- "C:/Users/donbo/Dropbox/synpuf/"
 # danpath <- paste0(syndrop, syndanfn)
 syntdpath <- paste0(syndrop, synfn_td)
 
-taxout <- "D:/tax_data/"
+
+# TaxData enhanced data ----
+edir <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/" # enhanced files are stored here
+epuf_fn <- "puf_rottenpuf.csv"
+esyn_fn <- "puf_synpuf.csv"
+
+epuf_path <- paste0(edir, epuf_fn)
+esyn_path <- paste0(edir, esyn_fn)
+
+taxout <- "D:/tax_data/" # Tax-Calculator results go here
 
 ```
 
@@ -150,6 +159,8 @@ stats <- long %>%
   group_by(ftype, vname) %>%
   summarise(n=n(),
             n.NA=sum(is.na(value)),
+            nnz=sum(value != 0),
+            nnz_pct=nnz / n * 100,
             mean=mean(value, na.rm=TRUE),
             median=median(value, na.rm=TRUE), 
             sd=sd(value, na.rm=TRUE),
@@ -159,38 +170,160 @@ b <- proc.time() # 40 secs
 b - a
 stats %>% ht
 
+stats_lab <- stats %>%
+  left_join(puf_vnames %>% select(vname, vdesc)) %>%
+  left_join(pufsums %>% select(vname, wtdsumb))
+
+a <- proc.time()
+nzstats <- long %>%
+  filter(value!=0) %>%
+  group_by(ftype, vname) %>%
+  summarise(n=n(),
+            n.NA=sum(is.na(value)),
+            nneg=sum(value < 0),
+            neg_pct=nneg / n * 100,
+            mean=mean(value, na.rm=TRUE),
+            median=median(value, na.rm=TRUE), 
+            sd=sd(value, na.rm=TRUE),
+            kurtosis=e1071::kurtosis(value, type=2, na.rm=TRUE),
+            skewness=e1071::skewness(value, type=2, na.rm=TRUE))
+b <- proc.time() # 40 secs
+b - a
+nzstats_lab <- nzstats %>%
+  left_join(puf_vnames %>% select(vname, vdesc)) %>%
+  left_join(pufsums %>% select(vname, wtdsumb))
+nzstats_lab %>% ht
+
 # make a wide file of statistics
-wstats <- stats %>%
-  gather(stat, value, -ftype, -vname) %>%
+nzwstats <- nzstats_lab %>%
+  select(-n, -n.NA, -nneg) %>%
+  gather(stat, value, -ftype, -vname, -vdesc, -wtdsumb) %>%
   spread(ftype, value) %>%
-  mutate(stat=factor(stat, levels=c("n", "n.NA", "mean", "median", "sd", "kurtosis", "skewness"))) %>%
+  mutate(stat=factor(stat, levels=c("neg_pct", "mean", "median", "sd", "kurtosis", "skewness"))) %>%
   arrange(vname, stat) %>%
   mutate(diff=syn - puf,
          pdiff=diff / puf * 100)
 
 fstat <- function(vname.in){
-  tab <- wstats %>%
+  tab <- nzwstats %>%
     filter(vname==vname.in) %>%
-    kable(digits=c(0, 0, 1, 1, 1, 1),
-          format.args=list(big.mark = ',')) %>%
-    kable_styling()
+    select(vname, stat, puf, syn, diff, pdiff, vdesc) %>%
+    kable(digits=c(0, 0, 0, 0, 0, 1, 0, 0),
+          format.args=list(big.mark = ','),
+          format="rst")
+  # %>% kable_styling()
   # print(tab)
   return(tab)
 }
 
-fstat("E00100")
-fstat("E00200")
-fstat("E00300")
-fstat("E01500")
-
-wstats %>%
-  mutate(diff=syn - puf,
-         pdiff=diff / puf * 100) %>%
-  kable(digits=c(0, 0, 1, 1, 1, 1),
-        format.args=list(big.mark = ','))
+# fstat("E00100")
+# fstat("E00200")
+# fstat("E00300")
+# fstat("E01500")
+fstat("E02000")
+fstat(largeded[4])
+largeinc
+# 
+# wstats %>%
+#   mutate(diff=syn - puf,
+#          pdiff=diff / puf * 100) %>%
+#   kable(digits=c(0, 0, 1, 1, 1, 1),
+#         format.args=list(big.mark = ','))
 # ht(wstats)
+  # tab <- nzwstats %>%
+  #   filter(vname==vname.in) %>%
+  #   select(vname, stat, puf, syn, diff, pdiff, vdesc) %>%
+vname.in <- largeinc[2]
+ft <- nzwstats %>%
+  filter(vname==vname.in) %>%
+  select(stat, puf, syn, diff, pdiff) %>%
+  flextable() %>% 
+  set_header_labels(stat="Statistic",
+                    puf = "PUF",
+                    syn = "Synthetic\nfile",
+                    diff="Difference",
+                    pdiff="% difference") %>%
+  colformat_num(col_keys = c("puf", "syn", "diff"),
+                big.mark=",", digits = 0, na_str = "N/A") %>%
+  colformat_num(col_keys = c("pdiff"),
+                big.mark=",", digits = 1, na_str = "N/A") %>%
+  add_header_lines(values = vname.in) %>%
+  theme_box() %>%
+  autofit()#  %>% # dim width(j=~variable1 + variable2, width=3)
+ft
+dim(ft)
+# save_as_image(ft, path = here::here("results", "corr_worst_table.png"))
+
+
+# stats scatter ----
+vstat <- "median"
+vstat <- "sd"
+vstat <- "kurtosis"
+vstat <- "skewness"
+vstat <- "mean"
+nzwstats %>%
+  filter(stat==vstat) %>%
+  mutate(vlab=ifelse(abs(pdiff>20), vname, NA)) %>%
+  ggplot(aes(puf, syn)) +
+  geom_point() +
+  geom_text(aes(label=vlab)) +
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_abline(slope=1, intercept=0) +
+  ggtitle(vstat) +
+  coord_equal()
+
+
 
 ```
+
+
+### Plot of nonzero percent 
+```{r}
+nzdat <- stats_lab %>%
+  mutate(z_pct=100 - nnz_pct) %>%
+  select(ftype, vname, vdesc, wtdsumb, z_pct) %>%
+  pivot_wider(names_from = ftype, values_from=z_pct) %>%
+  mutate(diff=syn - puf)
+
+
+f <- function(df) {
+  df <- df %>%
+    filter(vname %in% vars) %>%
+    mutate(vname=factor(vname, levels=vars, labels=vlabs))
+  return(df)
+}
+
+vars <- c("E00100", "E00200", "E00300", "E00600", "E01400")
+vlabs <- c("AGI\n(E00100)", "Wages\n(E00200)", "Interest\nreceived\n(E00300)", "Dividends\n(E00600)",
+           "Taxable IRA\ndistribution\n(E01400)")
+
+p <- stats_lab %>%
+  mutate(z_pct=100 - nnz_pct) %>%
+  select(ftype, vname, vdesc, z_pct) %>%
+  pivot_wider(names_from = ftype, values_from=z_pct) %>%
+  mutate(labval=factor(vname, levels=vars, labels=vlabs),
+         labeled=ifelse(vname %in% vars, 1, 0) %>% as.factor) %>%
+  ggplot(aes(x=puf, y=syn, label=labval)) +
+  geom_point(aes(colour=labeled, size=labeled)) +
+  scale_colour_manual(values=c("black", "darkblue")) +
+  scale_size_manual(values=c(0.2, 0.8)) +
+  geom_abline(slope=1, intercept=0) +
+  geom_text_repel(size=2, fontface = "bold", colour="darkblue", point.padding = 0.2, nudge_x=3) + # point.padding = 0.005, 
+  # geom_text(size=3, fontface = "bold", colour="darkblue", hjust=1, nudge_x=-3, nudge_y=0) +
+  coord_equal() +
+  ggtitle("Percentage of observations that are zero",
+          subtitle="Selected important variables labeled") +
+  theme_bw() +
+  scale_x_continuous(name="% of PUF observations", limits=c(0, 100), breaks=seq(0, 100, 10)) +
+  scale_y_continuous(name="% of synthetic observations", limits=c(0, 100), breaks=seq(0, 100, 10))  +
+  theme(legend.position = "none")
+p
+ggsave(here::here("results", "scat_zpct.png"), p, width=9, height=5)
+
+```
+
+
 
 
 ### Density plots
@@ -249,21 +382,68 @@ kdplot <- function(var, vnames=puf_vnames){
   return(p)
 }
 
+
+kdplot_fill <- function(var, vnames=puf_vnames){
+  sq10 <- c(0, 1e3, 10e3, 25e3, 50e3, 100e3, 250e3, 500e3, 750e3, 1e6,
+            1.5e6, 2e6, 3e6, 4e6, 5e6, 10e6, 25e6, 50e6, 100e6)
+  xlabs <- scales::comma(sq10 / 1e3)
+  
+  # xscale.l10 <- scale_x_log10(name=paste0(var, " in $ thousands, log 10 scale"), breaks=sq10, labels=xlabs)
+  xscale.l10 <- scale_x_log10(name=paste0(var, " in $ thousands, log 10 scale"), breaks=sq10, labels=xlabs, limits=c(1e3, NA))
+  
+  vdesc <- vnames$vdesc[vnames$vname==var]
+  
+  gtitle <- paste0("Kernel density plot for positive values of: ", vdesc, " (", var, ")")
+  
+  p <- stack %>%
+    dplyr::select(ftype, value=var) %>%
+    filter(value > 0) %>%
+    mutate(ftype=factor(ftype, levels=c("puf", "syn"))) %>%
+    group_by(ftype) %>%
+    # sample_n(1000) %>%
+    ggplot(aes(value, fill=ftype)) +
+    geom_density(size=0.0, alpha=0.2) +
+    scale_fill_manual(values=c("blue", "red")) +
+    # scale_fill_manual(values=c("blue", "#de2d26")) +
+    # scale_x_continuous(name="value of variable") +
+    xscale.l10 +
+    theme_bw() +
+    ggtitle(gtitle, subtitle="Log scale; values below $1,000 not shown") +
+    theme(plot.title=element_text(size=12)) +
+    theme(axis.text.x=element_text(angle=45, size=10, hjust=1, colour="black")) +
+    guides(fill = guide_legend(title=NULL))
+  print(p)
+  return(p)
+}
+
+# geom_density defaults
+# bw = "nrd0", adjust = 1, kernel = "gaussian", n = 512, trim = FALSE
+# bw The smoothing bandwidth to be used. If numeric, the standard deviation of the smoothing kernel.
+# If character, a rule to choose the bandwidth, as listed in stats::bw.nrd().
+# bw.nrd0 implements a rule-of-thumb for choosing the bandwidth of a Gaussian kernel density estimator. It defaults
+# to 0.9 times the minimum of the standard deviation and the interquartile range divided by 1.34 times the sample size
+# to the negative one-fifth power (= Silverman's ‘rule of thumb’, Silverman (1986, page 48, eqn (3.31))) 
+# unless the quartiles coincide when a positive result will be guaranteed. 
+
+# n number of equally spaced points at which the density is to be estimated, should be a power of two
+# When n > 512, it is rounded up to a power of 2 during the calculations (as fft is used) and the final result is 
+# interpolated by approx. So it almost always makes sense to specify n as a power of two.
+
 ```
 
 
 ### Income variables, kernel density plots
 ```{r uvplots_kd_income}
-p1 <- kdplot(largeinc[1])
+p1 <- kdplot_fill(largeinc[1])
 (p1a <- p1 + annotate("text", x=5e6, y=.45, label="AGI", size=8))
 
-p2 <- kdplot(largeinc[2])
+p2 <- kdplot_fill(largeinc[2])
 (p2a <- p2 + annotate("text", x=2e6, y=.5, label="Wages", size=8))
 
-p3 <- kdplot(largeinc[3])
+p3 <- kdplot_fill(largeinc[3])
 (p3a <- p3 + annotate("text", x=500e3, y=.6, label="Pensions", size=8))
 
-p4 <- kdplot(largeinc[4])
+p4 <- kdplot_fill(largeinc[4])
 (p4a <- p4 + annotate("text", x=7.5e3, y=.35, label="Schedule E\nNet income", size=8))
 
 g <- arrangeGrob(p1a, p2a, p3a, p4a, ncol=2)
@@ -276,20 +456,20 @@ ggsave(here::here("results", "kdf_income.png"), g, width=9, height=5, scale=1.75
 
 ### Deduction variables, kernel density plots
 ```{r uvplots_kd_deduct}
-p1 <- kdplot(largeded[1])
-p1a <- p1 + annotate("text", x=250e3, y=.75, label="Interest paid", size=8)
+q1 <- kdplot_fill(largeded[1])
+q1a <- q1 + annotate("text", x=250e3, y=.75, label="Interest paid", size=8)
 
-p2 <- kdplot(largeded[2])
-p2a <- p2 + annotate("text", x=1e6, y=.4, label="SALT", size=8)
+q2 <- kdplot_fill(largeded[2])
+q2a <- q2 + annotate("text", x=1e6, y=.4, label="SALT", size=8)
 
-p3 <- kdplot(largeded[3])
-p3a <- p3 + annotate("text", x=500e3, y=.5, label="Cash\ncontributions", size=8)
+q3 <- kdplot_fill(largeded[3])
+q3a <- q3 + annotate("text", x=500e3, y=.5, label="Cash\ncontributions", size=8)
 
-p4 <- kdplot(largeded[4])
-p4a <- p4 + annotate("text", x=100e3, y=1, label="Medical &\ndental", size=8)
+q4 <- kdplot_fill(largeded[4])
+q4a <- q4 + annotate("text", x=100e3, y=1, label="Medical &\ndental", size=8)
 
-g <- arrangeGrob(p1a, p2a, p3a, p4a, ncol=2)
-ggsave(here::here("results", "kdf_deductions.png"), g, width=9, height=5, scale=1.75)
+gq <- arrangeGrob(q1a, q2a, q3a, q4a, ncol=2)
+ggsave(here::here("results", "kdf_deductions.png"), gq, width=9, height=5, scale=1.75)
 
 # kdplot(var="E00200") #, puf_vnames)
 # l_ply(incvars, kdplot)
@@ -1023,6 +1203,201 @@ tab %>%
 
 
 # Examine weighted enhanced files
+## Get the data files
+```{r}
+puf_vnames <- get_puf_vnames() %>% mutate(vname=str_to_upper(vname))
+
+epuf <- read_csv(epuf_path, col_types = cols(.default= col_double()), n_max=-1)
+esyn <- read_csv(esyn_path, col_types = cols(.default= col_double()), n_max=-1)
+
+nrow(epuf); nrow(esyn) # 248591 762749
+ncol(epuf); ncol(esyn) # 87 each
+setdiff(names(epuf), names(esyn)) # epuf has filer, not in esyn
+setdiff(names(esyn), names(epuf)) # esyn has data_source, not in epuf
+count(epuf, filer)
+#   filer      n
+#   <dbl>  <int>
+# 1     0   7346
+# 2     1 241245
+count(esyn, data_source) # interesting...
+#   data_source      n
+#         <dbl>  <int>
+# 1           0   7346
+# 2           1 755403
+# I don't think we need either of the variables
+
+
+
+```
+
+## Stack and make the epuf and esyn files similiarly rotten
+```{r}
+common_names <- intersect(names(epuf), names(esyn)) # we lose filer and data_source, don't think we need either
+estack <- bind_rows(epuf %>% select(common_names) %>% mutate(ftype="puf"),
+                    esyn %>% select(common_names) %>% mutate(ftype="syn")) %>%
+  arrange(ftype, RECID) %>%
+  mutate(RECID_original=RECID,
+         RECID=row_number())
+
+bad <- estack %>% 
+  filter(e00200 != (e00200p + e00200s)) %>% 
+  select(ftype, RECID, starts_with("e00200")) %>%
+  mutate(ppct=e00200p / e00200 * 100,
+         spct=e00200s / e00200 * 100,
+         pctsum=ppct + spct)
+count(bad, ftype) # all are syn records
+
+# rotten enhanced file, same rules for both
+estack_rotten <- estack %>%
+  # first fix the e00200 variables because 541 of these records on the synfile do not sum properly
+  # within Tax-Calculator tolerances although most are extremely close so choose a simple fix
+  mutate(e00200s=e00200 - e00200p) %>%
+  # now fix the truly rotten variables
+  mutate(e00900p=case_when(MARS==2 & e00900!=0 & e00200!=0 ~ e00200p / e00200 * e00900,
+                           MARS==2 & e00900!=0 & e00200==0 ~ e00900 * .5,
+                           TRUE ~ e00900p),
+         e00900s=e00900 - e00900p,
+         e02100p=case_when(MARS==2 & e02100!=0 & e00200!=0 ~ e00200p / e00200 * e02100,
+                           MARS==2 & e02100!=0 & e00200==0 ~ e02100 * .5,
+                           TRUE ~ e02100p),
+         e02100s=e02100 - e02100p)
+
+esr_samp_path <- paste0(edir, "estack_rotten_samp.csv")
+esr_path <- paste0(edir, "estack_rotten.csv")
+
+set.seed(1234)
+estack_rotten %>%
+  group_by(ftype) %>%
+  sample_n(1000) %>%
+  write_csv(esr_samp_path)
+
+estack_rotten %>%
+  group_by(ftype) %>%
+  write_csv(esr_path)
+
+
+# details below
+set.seed(1234)
+estack_rotten %>%
+  filter(e00900p!=0) %>%
+  group_by(ftype) %>%
+  sample_n(30) %>%
+  select(ftype, MARS, RECID, starts_with("e00900"), starts_with("e00200")) %>%
+  arrange(MARS, ftype, RECID)
+
+
+
+set.seed(1234)
+estack_rotten %>%
+  filter(e02100p!=0) %>%
+  group_by(ftype) %>%
+  sample_n(30) %>%
+  select(ftype, MARS, RECID, starts_with("e02100"), starts_with("e00200")) %>%
+  arrange(MARS, ftype, RECID)
+
+
+# various checks below to help me figure out how to make the files similarly rotten
+common_names %>% sort # the only X variable is XTOT
+
+# record weight on both files appears to need to be divided by 100, but we'll bring in weights later so don't worry now
+quantile(epuf$s006)
+quantile(esyn$s006)
+
+# e00900 syn file has 0 for all
+estack %>%
+  filter(MARS==2, e00900!=0) %>%
+  group_by(ftype) %>%
+  mutate(n=n()) %>%
+  summarise_at(vars(n, e00900, e00900p, e00900s), list(mdn=~median(.), max=~max(.)))
+
+# e02100 syn file problems are less clear
+estack %>%
+  filter(MARS==1, e02100!=0) %>%
+  group_by(ftype) %>%
+  mutate(n=n()) %>%
+  summarise_at(vars(n, e02100, e02100p, e02100s), list(mdn=~median(.), max=~max(.)))
+
+
+
+count(estack, ftype, XTOT) # looks plausible
+
+```
+
+
+<!--
+# Tax-Calculator user guide:
+# https://pslmodels.github.io/Tax-Calculator/uguide.html
+
+# Use system2 command: here is an example:
+# cmd1 <- "C:/Users/donbo/Anaconda3/Scripts/tc"
+# args <- c("D:/tcdir/synth10syn20.csv", "2013", 
+#           "--reform", "D:/Dropbox/RPrograms PC/OSPC/syndata4/tax_plans/brk4_1k_2013.json", 
+#           "--dump", 
+#           "--outdir", "D:/tcdir/")
+# system2(cmd1, args)
+
+# Do not include --reform and its location if this is a baseline run
+
+-->
+
+```{r taxcalc}
+# Tax-Calculator user guide:
+# https://pslmodels.github.io/Tax-Calculator/uguide.html
+
+# Use system2 command: here is an example:
+# cmd1 <- "C:/Users/donbo/Anaconda3/Scripts/tc"
+# args <- c("D:/tcdir/synth10syn20.csv", "2013", 
+#           "--reform", "D:/Dropbox/RPrograms PC/OSPC/syndata4/tax_plans/brk4_1k_2013.json", 
+#           "--dump", 
+#           "--outdir", "D:/tcdir/")
+# system2(cmd1, args)
+
+# Do not include --reform and its location if this is a baseline run
+
+
+# pick one of the two paths below
+# stackpath <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/estack_rotten_samp.csv"
+stackpath <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/estack_rotten.csv"
+cmd1 <- "C:/ProgramData/Anaconda3/Scripts/tc"
+args <- c(shQuote(stackpath), "2018",
+          "--dump",
+          "--outdir", taxout)
+cmd1
+args
+
+#.. run the command ----
+a <- proc.time()
+system2(cmd1, args) # CAUTION: this will overwrite any existing output file that had same input filename!
+# consider system2
+b <- proc.time()
+b - a  # it can easily take 5-10 minutes depending on the size of the input file
+
+(tc_samp_path <- paste0(taxout, "estack_rotten_samp-18-#-#-#.csv"))
+esr_samp_path
+
+(tc_path <- paste0(taxout, "estack_rotten-18-#-#-#.csv"))
+esr_path
+
+# use either the sample or full output
+# f1 <- esr_samp_path; f2 <- tc_samp_path # sample output
+f1 <- esr_path; f2 <- tc_path # full output
+check <- read_csv(f1) %>% 
+  select(ftype, RECID, RECID_original, s006) %>%
+  left_join(read_csv(f2) %>%
+              select(RECID, taxbc))
+
+check %>% ht
+check %>% 
+  group_by(ftype) %>%
+  summarise(taxbc=sum(s006 / 100 * taxbc) / 1e9) %>%
+  spread(ftype, taxbc) %>%
+  mutate(diff=syn - puf, pdiff=diff / puf * 100) %>%
+  kable(format="rst", digits=1, format.args = list(big.mark=","))
+
+
+```
+
+
 ## Temporary work with puf and syn
 ```{r}
 glimpse(stack)
@@ -1066,13 +1441,86 @@ system2(cmd1, args) # CAUTION: this will overwrite any existing output file that
 b <- proc.time()
 b - a  # it can easily take 5-10 minutes depending on the size of the input file
 
-
-
-
-  
-
 ```
 
+
+```{r stub_parallel}
+# ONETIME for each new combination of files making up stack ----
+# IF NEEDED take the already prepared stack file and write it to a directory that all parallel processes can read ----
+write_csv(stack, paste0(globals$tc.dir, source.fn))
+saveRDS(stack, paste0(globals$tc.dir, str_remove(source.fn, ".csv"), "_stack.rds"))
+# run the baseline tax on the stacked file
+run_taxplan_getresults(source.fn) # write output to csv and rds files
+# END ONETIME ----
+
+#.. run it in parallel ----
+library("doParallel")
+cl <- makeCluster(6)
+registerDoParallel(cl)
+
+packages <- c("magrittr", "tidyverse", "dplyr")
+# CAUTION:  DO NOT PASS large items as function arguments
+# instead export them
+xport <- c("globals", "source.fn", "run_taxplan_getresults", "tc.wincmd") 
+popts <- list(.packages=packages, .export=xport)
+popts
+
+# now run in parallel
+a <- proc.time()
+warn <- options()$warn
+options(warn=-1)
+l_ply(reform, .progress="text", .parallel=FALSE, .paropts=popts, .fun=runtc, source.fn=source.fn)
+options(warn=warn)
+b <- proc.time()
+b - a
+
+stopCluster(cl)
+
+# conditional execution in a pipeline - for parallel or not
+# https://community.rstudio.com/t/conditional-pipelines/6076/2
+# mtcars %>% 
+#   {if (FALSE) filter(., hp == 245) else .} %>% 
+#   {if (FALSE) select(., cyl) else .} %>%
+#   head(10)
+
+# choose one of the following
+ftype_opt <- "syn"
+# ftype_opt <- "syn_nd"
+parallel <- TRUE
+# parallel <- FALSE
+
+# djb ----
+a <- proc.time()
+if(parallel){
+  # set the latest versions of functions, etc. up for the run
+  cluster_copy(cluster, c("getwts_ipopt", "ipopt_reweight",
+                          "define_jac_g_structure_dense", "eval_f_xtop", "eval_grad_f_xtop", "eval_g_dense",
+                          "eval_jac_g_dense", "eval_h_xtop",
+                          "calc_constraints",
+                          "bounds"))
+  cluster_library(cluster, c("dplyr", "tidyr", "ipoptr", "readr"))
+}
+opt_pre <- ccoef %>%
+  filter(ftype==ftype_opt) %>%
+  # filter(ugroup %in% 6) %>%
+  group_by(ugroup) %>%
+  {if (parallel) partition(., cluster) else .}
+
+opt <- opt_pre %>%
+  do(getwts_ipopt(., all_constraint_vals, bounds, scale=TRUE)) %>%
+  {if (parallel) collect(.) else .} %>%
+  ungroup
+b <- proc.time()
+b - a # seconds
+(b - a) / 60 # minutes
+
+# https://www.statisticshowto.datasciencecentral.com/probability-and-statistics/skewed-distribution/
+# https://www.frontiersin.org/articles/10.3389/fpsyg.2019.01089/full  overlap
+# https://www.jclinepi.com/article/S0895-4356(10)00257-X/pdf
+# 
+
+
+```
 
 
 
@@ -1107,14 +1555,15 @@ b - a  # it can easily take 5-10 minutes depending on the size of the input file
 
 
 ```{r name_defs, include=FALSE}
-edir <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/"
+
 
 ep_rotten <- "cps-matched-puf_rottenpuf.csv" # the true PUF as enhanced, with "rotten" features added
 ep_weights_gz <- "puf_weights_CVXOPT_rottenpuf.csv.gz" # weights for above
 ep_weights <- "puf_weights_CVXOPT_rottenpuf.csv" # weights for above
 #              puf_weights_CVXOPT_rottenpuf.csv.gz
 
-es_rotten <- "cps-matched-puf_synpuf.csv"  # the synpuf rotten as is (with X) values set to 1
+# es_rotten <- "cps-matched-puf_synpuf.csv"  # the synpuf rotten as is (with X) values set to 1
+es_rotten <- "puf_synpuf.csv"
 es_weights_gz <- "puf_weights_CVXOPT_synpuf.csv.gz" # weights for above
 es_weights <- "puf_weights_CVXOPT_synpuf.csv" # weights for above
 
@@ -1133,6 +1582,8 @@ glimpse(eptrue)
 epuf <- read_csv(paste0(edir, ep_rotten),
                          col_types = cols(.default= col_double()),
                          n_max=-1)
+
+# puf_synpuf.csv
 
 ns(epuf)
 
@@ -1218,12 +1669,56 @@ eprpath <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/cps-matched-puf_rottenpuf
 taxout <- "D:/tax_data/"
 eptpath <- "D:/tax_data/puf_true_input_for_tc.csv" # the true puf input
 
+# try to make it work with es_rotten
+slgfdir <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/"
+(espath <- paste0(slgfdir, es_rotten))
+
+# inspect the file enhanced synthetic rotten file
+esr <- read_csv(espath,
+                col_types = cols(.default= col_double()),
+                n_max=-1)
+glimpse(esr)
+# check splits
+#   e00200 = e00200p + e00200s  # wages
+#   e00900 = e00900p + e00900s  # business income or loss
+#   e02100 = e02100p + e02100s  # Schedule F net profit/loss
+check <- esr %>%
+  select(RECID, MARS, starts_with("e00200"), starts_with("e00900"), starts_with("e02100")) %>%
+  mutate(chk200=e00200 - e00200p - e00200s,
+         chk900=e00900 - e00900p - e00900s,
+         chk2100=e02100 - e02100p - e02100s)
+
+check %>%
+  select(RECID, MARS, starts_with("chk")) %>%
+  gather(vname, value, -RECID, -MARS) %>%
+  group_by(MARS, vname) %>%
+  do(qtiledf(.$value))
+
+check2 <- check %>%
+  filter(MARS==2)
+
+
 cmd1 <- "C:/ProgramData/Anaconda3/Scripts/tc"
-args <- c(shQuote(eptpath), "2018",
+args <- c(shQuote(espath), "2018",
           "--dump",
           "--outdir", taxout)
 cmd1
 args
+
+# test <- read_csv("C:/Windows/System32/test.csv")
+# names(test)
+# anyDuplicated(esr$RECID)
+# ns(esr)
+
+testfn <- paste0(taxout, "syntest.csv")
+esr %>%
+  # sample_n(1000) %>%
+  do(prime_spouse_splits(.)) %>%
+  # select(names(test)) %>%
+  write_csv(testfn)
+args <- c(shQuote(testfn), "2018",
+          "--dump",
+          "--outdir", taxout)
 
 #.. run the command ----
 a <- proc.time()
@@ -1231,6 +1726,16 @@ system2(cmd1, args) # CAUTION: this will overwrite any existing output file that
 # consider system2
 b <- proc.time()
 b - a  # it can easily take 5-10 minutes depending on the size of the input file
+
+
+# stack2 <- stack %>%
+#   setNames(change_case(names(.))) %>% # Tax-Calculator expects mostly lower-case names
+#   do(impose_variable_rules(.)) %>% # not needed for synpuf5 and later
+#   do(prime_spouse_splits(.)) %>%
+#   arrange(ftype) %>% # DJB NEW!
+#   mutate(RECID_original=RECID,
+#          RECID=row_number()) # WILL OVERWRITE OLD RECID!!!!
+
 
 ```
 

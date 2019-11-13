@@ -94,3 +94,19 @@ xcheck %>%
   mutate_at(vars(starts_with("num")), list(~naz(.))) %>%
   filter(MARS %in% 2) %>%
   kable(digits=0, format = "rst", format.args = list(big.mark=",")) 
+
+
+p <- ggplot(mtcars, aes(mpg, wt)) +
+  geom_point(aes(colour = factor(cyl)))
+
+p + scale_colour_manual(values = c("blue", "darkgreen", "red"))
+
+# It's recommended to use a named vector
+cols <- c("8" = "red", "4" = "blue", "6" = "darkgreen", "10" = "orange")
+p + scale_colour_manual(values = cols) # look at legend
+
+p + scale_colour_manual(
+  values = cols,
+  breaks = c("4", "6", "8"),
+  labels = c("four", "six", "eight")
+)
