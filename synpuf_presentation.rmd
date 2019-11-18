@@ -33,28 +33,34 @@ assign("last.warning", NULL, envir = baseenv())
 
 ```{r system_specific_info, include=TRUE}
 # change information here as needed
+
+slgfdir <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/" # enhanced files are stored here
+syndrop <- "C:/Users/donbo/Dropbox/synpuf/"
+
 pufpath <- "C:/Users/donbo/Dropbox/OSPC - Shared/IRS_pubuse_2011/puf2011.csv"
 
+# original files prepped for tax calculator
+osr_path <- paste0(slgfdir, "ostack_rotten.csv")
+osr_samp_path <- paste0(slgfdir, "ostack_rotten.csv")
+
+# synthetic files
 syndir <- "C:/Users/donbo/Google Drive/synpuf/syntheses/"
 
 synfn <-  "synpuf20_no_disclosures_weighted.csv"
 syndanfn <- "synpuf20calc.csv"
 synfn_td <-  "synpuf20_no_disclosures_weighted_for_taxdata.csv"
 
-
-syndrop <- "C:/Users/donbo/Dropbox/synpuf/"
 # synpath <- paste0(syndrop, synfn)
 # danpath <- paste0(syndrop, syndanfn)
 syntdpath <- paste0(syndrop, synfn_td)
 
 
 # TaxData enhanced data ----
-edir <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/" # enhanced files are stored here
 epuf_fn <- "puf_rottenpuf.csv"
 esyn_fn <- "puf_synpuf.csv"
 
-epuf_path <- paste0(edir, epuf_fn)
-esyn_path <- paste0(edir, esyn_fn)
+epuf_path <- paste0(slgfdir, epuf_fn)
+esyn_path <- paste0(slgfdir, esyn_fn)
 
 taxout <- "D:/tax_data/" # Tax-Calculator results go here
 
@@ -76,7 +82,7 @@ glimpse(puf)
 syn <- read_csv(syntdpath)
 glimpse(syn)
 
-puf_vnames <- get_puf_vnames() %>% mutate(vname=str_to_upper(vname))
+puf_vnames <- get_puf_vnames() %>% mutate(vname=str_to_upper(vname)) %>% filter(vnum!=9030) # remove a 2nd XTOT
 
 common_names <- intersect(names(puf), names(syn))
 
@@ -1155,7 +1161,6 @@ ggsave(here::here("results", "scat_text.png"), g, width=9, height=5)
 ## Worst correlation differences
 ```{r cor_worst}
 
-
 tab <- cor.comp %>%
   arrange(desc(abs(diff))) %>%
   select(-vname1, -vname2) %>%
@@ -1202,7 +1207,385 @@ tab %>%
 ```
 
 
-# Examine weighted enhanced files
+# Examine weighted UNenhanced files
+
+<!--
+Comments
+-->
+
+## First, test taxcalc
+```{r taxcalc_test}
+# Tax-Calculator user guide:
+# https://pslmodels.github.io/Tax-Calculator/uguide.html
+
+# Here is the tc CLI usage: 
+# tc INPUT TAXYEAR [--help]
+# [--baseline BASELINE] [--reform REFORM] [--assump  ASSUMP]
+# [--exact] [--tables] [--graphs]
+# [--dump] [--dvars DVARS] [--sqldb] [--outdir OUTDIR]
+# [--test] [--version]
+
+# --dump causes all the input variables (including the ones understood by Tax-Calculator but not included in test.csv,
+# which are all zero) and all the output variables calculated by Tax-Calculator to be included in the output file
+
+# Create a dumpvars.txt text file like this:
+# c00100 c62100 c09600 c05800 taxbc
+# cat("c00100 c62100 c09600 c05800 taxbc", file="D:/tax_data/tc_testfiles/dumpvars.txt",sep=" ")
+
+
+# first baseline, then reform
+# tc "d:/tcdir/puf_vs_csv/puf.csv" 2014 --dump --outdir "d:/tcdir/puf_vs_csv"
+# tc "d:/tcdir/puf_vs_csv/cps.csv" 2014 --dump --outdir "d:/tcdir/puf_vs_csv"
+
+# tc test.csv 2020 runs tc on the file test.csv; it produces test-20-#-#-#.csv
+#   first # symbol indicates we did not specify a baseline file
+#   second # symbol indicates we did not specify a policy reform file
+#   third # symbol indicates we did not specify an economic assumption file.
+
+# variables included in the minimal output file include:
+#   RECID (of filing unit in the input file), YEAR (specified when executing tc), WEIGHT (which is same as s006),
+#   INCTAX (which is same as iitax), LSTAX (which is same as lumpsum_tax) and PAYTAX (which is same as payroll_tax)
+
+# Tax-Calculator extrapolation: ----
+# Per the user guide, 
+#   Tax-Calculator knows to extrapolate (or age) filing unit data in the cps.csv file to the specified tax year
+# I assume this is true if the file is named puf.csv, also, but documentation does not say
+
+# To do extrapolation manually, we will need:
+#   our equivalent of the enhanced puf: puf_data/cps-matched-puf.csv (restricted so not online)
+#   taxdata/puf_stage1/growfactors.csv and Tax-Calculator/taxcalc/growfactors.csv,
+#     apply as in Tax-Calculator/taxcalc/records.py _extrapolate
+#   our equivalent of taxdata/puf_stage2/puf_weights.csv
+#   taxdata/puf_stage3/puf_ratios.csv and Tax-Calculator/taxcalc/puf_ratios.csv
+#     apply as Tax-Calculator/in taxcalc/records.py _adjust
+#  plus, useful to look at stage3_targets.csv but not needed
+
+
+# To find directory for tc, in a command window type:
+#   where tc.exe
+
+# Build a Windows system command using the R command system2:
+#   - needs to define the location of the tc.exe command
+#   - to find this location, in a command window type: where tc.exe
+#   - all directory and file locations must be specified fully, not relative to this project
+#   - any directory or file names in the args component of system2 that have spaces must be shQuoted as shown below
+#   - fine to quote them all, even if they don't have spaces, just to be safe
+#   - DO NOT shQuote the cmd argument of system2
+
+# Use system2 command: here is an example:
+# cmd1 <- "C:/ProgramData/Anaconda3/Scripts/tc"
+# args <- c(shQuote("D:/tcdir/synth10syn20.csv"), "2013", 
+#           "--reform", "D:/Dropbox/RPrograms PC/OSPC/syndata4/tax_plans/brk4_1k_2013.json", 
+#           "--dump", 
+#           "--outdir", "D:/tcdir/")
+# system2(cmd1, args)
+
+# Do not include --reform and its location if this is a baseline run
+
+test_dir <- "D:/tax_data/tc_testfiles/"
+test_path <- paste0(test_dir, "test.csv")
+cmd1 <- "C:/ProgramData/Anaconda3/Scripts/tc"
+
+# very simple run, baseline
+args <- c(shQuote(test_path), "2020",
+          "--outdir", shQuote(test_dir))
+
+# baseline, dump all results
+args <- c(shQuote(test_path), "2020",
+          "--dump",
+          "--outdir", shQuote(test_dir))
+
+# A simple run - copy the line below, from C:, exactly as is, into a command window and run:
+#   C:/ProgramData/Anaconda3/Scripts/tc "D:/tax_data/tc_testfiles/test.csv" 2020 --outdir "D:/tax_data/tc_testfiles/"
+# when we construct the command in R, we must shQuote the directory names, so an R variable that contains this information
+# will not look quite like the commented out line above.
+
+# create a list of variables to put in the output file, if we do not want them all
+dvars <- c("c00100", "c62100", "c09600", "c05800", "taxbc")
+dvars_path <- "D:/tax_data/tc_testfiles/dumpvars.txt"
+cat(dvars, file=dvars_path, sep=" ") # write the dvars file
+
+args <- c(shQuote(test_path), "2020",
+          "--dump",
+          "--dvars", shQuote(dvars_path),
+          "--outdir", shQuote(test_dir))
+
+cmd1; args
+
+system2(cmd1, args)
+
+
+```
+
+
+## taxcalc on puf and the lowmatch file synpuf20_lowmatch_wfs.csv
+```{r taxcalc_oldfiles}
+# synpuf20_lowmatch
+# puf2011.csv
+# C:\Users\donbo\Google Drive\synpuf\syntheses\synpuf20_lowmatch.csv
+# synpuf20_lowmatch_wfs.csv
+# synpuf20_no_disclosures_weighted_for_taxdata.csv
+# use o (for "old") prefix
+# C:\Users\donbo\Dropbox\OSPC - Shared\IRS_pubuse_2011\puf2011.csv
+
+# puf['e03260'] = 0  (values are all zero in synthetic puf)
+
+puf_vnames <- get_puf_vnames() %>% mutate(vname=str_to_upper(vname))
+
+# old puf
+opuf <- read_csv("C:/Users/donbo/Dropbox/OSPC - Shared/IRS_pubuse_2011/puf2011.csv",
+                 col_types = cols(.default= col_double()), n_max=-1)
+ns(opuf)
+count(opuf, MARS)
+opuf %>%
+  summarise_at(vars(E09600, E05800), list(~ sum(. * S006 / 100) / 1e9))
+
+# osyn <- read_csv("C:/Users/donbo/Google Drive/synpuf/syntheses/synpuf20_lowmatch.csv", 
+#                  col_types = cols(.default= col_double()), n_max=-1)
+# ns(osyn)
+
+osyn2 <- read_csv("C:/Users/donbo/Google Drive/synpuf/syntheses/synpuf20_lowmatch_wfs.csv", 
+                 col_types = cols(.default= col_double()), n_max=-1)
+
+ns(osyn2)
+count(osyn2, MARS)
+
+osyn2a <- osyn2 %>%
+  rename(s006=wt.wtfs) %>%
+  mutate(s006=s006 * 100) %>%
+  select(-c(ftype, ends_with("p"), e00200s, e02100s, e00900s,
+            m, group, mgroup, c00100, taxbc, wt, wt.syn, pufseqn, wt.puf,
+            e00600_minus_e00650, e01500_minus_e01700)) %>%
+  setNames(str_to_upper(names(.)))
+ns(osyn2a)
+
+
+syn_nd <- read_csv(syntdpath, 
+                   col_types = cols(.default= col_double()), n_max=-1)
+glimpse(syn_nd)
+
+# AMTI and AMT
+# e00700 Taxable refunds of state and local income taxes
+# c04470 Itemized deductions after phase-out (zero for non-itemizers)
+# c17000 Sch A: Medical expenses deducted (component of pre-limitation c21060 total)
+# c18300 Sch A: State and local taxes plus real estate taxes deducted (component of pre-limitation c21060 total)
+# c20800 Sch A: Net limited miscellaneous deductions deducted (component of pre-limitation c21060 total)
+# c21040 Itemized deductions that are phased out
+    # if standard == 0.0:
+    #     c62100 = (c00100 - e00700 - c04470 +
+    #               max(0., min(c17000, 0.025 * c00100)) +
+    #               c18300 + c20800 - c21040)
+    # if standard > 0.0:
+    #     c62100 = c00100 - e00700
+
+
+
+# common_names2 <- intersect(names(opuf), names(osyn2)) # we lose filer and data_source, don't think we need either
+# common_names2 %>% sort
+
+```
+
+
+### taxcalc on the unenhanced puf and Max's lowmatch, with weights from scratch
+```{r unenh_lowmatch}
+common_names <- intersect(names(opuf), names(osyn2a)) # we lose filer and data_source, don't think we need either
+common_names %>% sort
+
+ostack <- bind_rows(opuf %>% filter(MARS!=0) %>% select(common_names) %>% mutate(ftype="puf"),
+                    osyn2a %>% select(common_names) %>% mutate(ftype="syn"))
+
+ostack_rotten <- ostack %>%
+  setNames(change_case(names(.))) %>%
+  do(prime_spouse_splits(.)) %>%
+  arrange(ftype, RECID) %>%
+  mutate(RECID_original=RECID,
+         RECID=row_number())
+
+ns(ostack_rotten)
+
+
+set.seed(1234)
+ostack_rotten %>%
+  group_by(ftype) %>%
+  sample_n(1000) %>%
+  write_csv(osr_samp_path)
+
+ostack_rotten %>%
+  write_csv(osr_path)
+
+# stackpath <- osr_samp_path
+stackpath <- osr_path
+
+cmd1 <- "C:/ProgramData/Anaconda3/Scripts/tc"
+args <- c(shQuote(stackpath), "2013",
+          "--dump",
+          "--outdir", taxout)
+cmd1
+args
+
+#.. run the command ----
+a <- proc.time()
+system2(cmd1, args) # CAUTION: this will overwrite any existing output file that had same input filename!
+# consider system2
+b <- proc.time()
+b - a  # it can easily take 5-10 minutes depending on the size of the input file
+
+year <- 2013
+# (tc_osr_samp_path <- paste0(taxout, "ostack_rotten_samp-", str_sub(year, 3, 4), "-#-#-#.csv"))
+(tc_osr_path <- paste0(taxout, "ostack_rotten-", str_sub(year, 3, 4), "-#-#-#.csv"))
+
+# use either the sample or full output
+# f1 <- osr_samp_path; f2 <- tc_osr_samp_path # sample output
+f1 <- osr_path; f2 <- tc_osr_path # full output
+df1 <- read_csv(f1)
+df2 <- read_csv(f2)
+ns(df1)
+ns(df2)
+check <- df1 %>% 
+  select(ftype, RECID, RECID_original, s006) %>%
+  left_join(df2 %>% select(-s006), by="RECID")
+glimpse(check)
+ns(check)
+count(check, ftype, FLPDYR)
+
+vars <- c("taxbc", "c09600", "c05800", "c00100", "c62100")
+check %>% 
+  select(ftype, FLPDYR, s006, vars) %>%
+  group_by(ftype, FLPDYR) %>%
+  summarise_at(vars(vars), list(~sum(s006 / 100 * .) / 1e9)) %>%
+  pivot_longer(vars, names_to="vname", values_to = "value") %>%
+  pivot_wider(names_from=ftype, values_from=value) %>%
+  mutate(diff=syn - puf, pdiff=diff / puf * 100) %>%
+  kable(format="rst", digits=1, format.args = list(big.mark=","))
+
+```
+
+
+
+
+
+## taxcalc on the unenhanced puf and Max's no disclosures, my new weights synpuf20_no_disclosures_weighted_for_taxdata.csv
+
+```{r unenh_nodisc}
+setdiff(names(opuf), names(syn_nd)) # a lot of puf vars not in syn
+setdiff(names(syn_nd), names(opuf)) # all synvars are in puf, good
+common_names <- intersect(names(opuf), names(syn_nd)) # we lose filer and data_source, don't think we need either
+common_names %>% sort
+
+ostack <- bind_rows(opuf %>% filter(MARS!=0) %>% select(common_names) %>% mutate(ftype="puf"),
+                    syn_nd %>% select(common_names) %>% mutate(ftype="syn"))
+
+ostack_rotten <- ostack %>%
+  setNames(change_case(names(.))) %>%
+  do(prime_spouse_splits(.)) %>%
+  arrange(ftype, RECID) %>%
+  mutate(RECID_original=RECID,
+         RECID=row_number())
+count(ostack_rotten, ftype)
+
+ns(ostack_rotten)
+ostack_rotten %>% group_by(ftype) %>% summarise(wt=sum(s006 /100))
+
+# get weighted sums of all variables in the file
+ostacklong <- ostack_rotten %>%
+  select(ftype, MARS, s006, starts_with("e"), starts_with("p")) %>%
+  pivot_longer(-c(ftype, MARS, s006), names_to = "vname", values_to = "value")
+glimpse(ostacklong)
+
+owtdns <- ostack_rotten %>% group_by(ftype, MARS) %>% summarise(value=sum(s006 / 100)) %>% mutate(vname="_wtdn")
+ostacksum <- ostacklong %>%
+  group_by(ftype, MARS, vname) %>%
+  summarise_at(vars(-s006), list(~sum(. * s006/100) / 1e6)) %>%
+  bind_rows(owtdns)
+
+odiffs <- ostacksum %>%
+  pivot_wider(names_from = ftype, values_from = value) %>%
+  mutate(diff=syn - puf,
+         pdiff=diff / puf * 100) %>%
+  arrange(MARS, desc(abs(diff)))
+
+
+odiffs %>%
+  arrange(MARS, desc(abs(diff))) %>%
+  # arrange(MARS, desc(abs(pdiff))) %>%
+  group_by(MARS) %>%
+  filter(row_number() <= 10) %>%
+  ungroup %>%
+  kable(digits=1, format.args = list(big.mark=","), format="rst")
+
+# get total diffs
+ostacksum %>%
+  group_by(ftype, vname) %>%
+  summarise(value=sum(value)) %>%
+  pivot_wider(names_from = ftype, values_from = value) %>%
+  mutate(diff=syn - puf,
+         pdiff=diff / puf * 100)  %>%
+  arrange(desc(abs(diff))) %>%
+  # arrange(desc(abs(pdiff))) %>%
+  filter(row_number() <= 20) %>%
+  left_join(puf_vnames %>% mutate(vname=str_to_lower(vname)) %>% select(vname, vdesc)) %>%
+  kable(digits=1, format.args = list(big.mark=","), format="rst")
+  
+
+# set.seed(1234)
+# ostack_rotten %>%
+#   group_by(ftype) %>%
+#   sample_n(1000) %>%
+#   write_csv("C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/puf_synnd_stack_rotten_samp.csv")
+
+ostack_rotten %>%
+  write_csv("C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/puf_synnd_stack_rotten.csv")
+
+stackpath <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/puf_synnd_stack_rotten.csv"
+
+year <- 2017
+
+cmd1 <- "C:/ProgramData/Anaconda3/Scripts/tc"
+args <- c(shQuote(stackpath), year,
+          "--dump",
+          "--outdir", taxout)
+cmd1
+args
+
+#.. run the command ----
+a <- proc.time()
+system2(cmd1, args) # CAUTION: this will overwrite any existing output file that had same input filename!
+# consider system2
+b <- proc.time()
+b - a  # it can easily take 5-10 minutes depending on the size of the input file
+
+(tc_path <- paste0(taxout, "puf_synnd_stack_rotten-", str_sub(year, 3, 4), "-#-#-#.csv"))
+
+# use either the sample or full output
+# f1 <- osr_samp_path; f2 <- tc_osr_samp_path # sample output
+f1 <- stackpath; f2 <- tc_path # full output
+df1 <- read_csv(f1)
+df2 <- read_csv(f2)
+ns(df1)
+ns(df2)
+check <- df1 %>% 
+  select(ftype, RECID, RECID_original, s006) %>%
+  left_join(df2 %>% select(-s006), by="RECID")
+glimpse(check)
+ns(check)
+count(check, ftype, FLPDYR)
+
+check %>% group_by(ftype) %>% summarise(wt=sum(s006 /100))
+
+vars <- c("taxbc", "c09600", "c05800", "c00100", "c62100")
+check %>% 
+  select(ftype, FLPDYR, s006, vars) %>%
+  group_by(ftype, FLPDYR) %>%
+  summarise_at(vars(vars), list(~sum(s006 / 100 * .) / 1e9)) %>%
+  pivot_longer(vars, names_to="vname", values_to = "value") %>%
+  pivot_wider(names_from=ftype, values_from=value) %>%
+  mutate(diff=syn - puf, pdiff=diff / puf * 100) %>%
+  kable(format="rst", digits=1, format.args = list(big.mark=","))
+
+```
+
+
+# Tax calc on the ENHANCED files from Yimeng: puf_rottenpuf.csv puf_synpuf.csv
 ## Get the data files
 ```{r}
 puf_vnames <- get_puf_vnames() %>% mutate(vname=str_to_upper(vname))
@@ -1226,18 +1609,43 @@ count(esyn, data_source) # interesting...
 # 2           1 755403
 # I don't think we need either of the variables
 
+```
+
+
+## check a few variables
+```{r}
+ns(epuf)
+ns(esyn)
+
+tmp <- bind_rows(epuf %>% mutate(ftype="puf"),
+                 esyn %>% mutate(ftype="syn"))
+tmp %>%
+  group_by(ftype) %>%
+  summarise(n=n(), wtdn=sum(s006 / 100), wages=sum(e00200 * s006 / 100) / 1e6, minFLPDYR=min(FLPDYR), maxFLPDYR=max(FLPDYR))
+
 
 
 ```
 
+
 ## Stack and make the epuf and esyn files similiarly rotten
 ```{r}
+# what do the split variables look like
+
 common_names <- intersect(names(epuf), names(esyn)) # we lose filer and data_source, don't think we need either
 estack <- bind_rows(epuf %>% select(common_names) %>% mutate(ftype="puf"),
                     esyn %>% select(common_names) %>% mutate(ftype="syn")) %>%
+  select(-FLPDYR) %>%
   arrange(ftype, RECID) %>%
   mutate(RECID_original=RECID,
          RECID=row_number())
+
+split_check <- estack %>%
+  filter(ftype=="puf", e00900!=0) %>%
+  group_by(MARS) %>%
+  sample_n(100) %>%
+  select(RECID, MARS, e00900, e00900p, e00900s)
+# for non-married records, the entire value of e00900 is in e00900p
 
 bad <- estack %>% 
   filter(e00200 != (e00200p + e00200s)) %>% 
@@ -1255,15 +1663,17 @@ estack_rotten <- estack %>%
   # now fix the truly rotten variables
   mutate(e00900p=case_when(MARS==2 & e00900!=0 & e00200!=0 ~ e00200p / e00200 * e00900,
                            MARS==2 & e00900!=0 & e00200==0 ~ e00900 * .5,
+                           MARS!=2 ~ e00900,
                            TRUE ~ e00900p),
          e00900s=e00900 - e00900p,
          e02100p=case_when(MARS==2 & e02100!=0 & e00200!=0 ~ e00200p / e00200 * e02100,
                            MARS==2 & e02100!=0 & e00200==0 ~ e02100 * .5,
+                           MARS!=2 ~ e02100,
                            TRUE ~ e02100p),
          e02100s=e02100 - e02100p)
 
-esr_samp_path <- paste0(edir, "estack_rotten_samp.csv")
-esr_path <- paste0(edir, "estack_rotten.csv")
+esr_samp_path <- paste0(slgfdir, "estack_rotten_samp.csv")
+esr_path <- paste0(slgfdir, "estack_rotten.csv")
 
 set.seed(1234)
 estack_rotten %>%
@@ -1275,7 +1685,6 @@ estack_rotten %>%
   group_by(ftype) %>%
   write_csv(esr_path)
 
-
 # details below
 set.seed(1234)
 estack_rotten %>%
@@ -1284,8 +1693,6 @@ estack_rotten %>%
   sample_n(30) %>%
   select(ftype, MARS, RECID, starts_with("e00900"), starts_with("e00200")) %>%
   arrange(MARS, ftype, RECID)
-
-
 
 set.seed(1234)
 estack_rotten %>%
@@ -1324,42 +1731,69 @@ count(estack, ftype, XTOT) # looks plausible
 ```
 
 
-<!--
-# Tax-Calculator user guide:
-# https://pslmodels.github.io/Tax-Calculator/uguide.html
+### get weighted sums of all variables in the estack_rotten file
+```{r}
+# estack_rotten
+glimpse(estack_rotten)
+estacklong <- estack_rotten %>%
+  select(ftype, MARS, s006, starts_with("e"), starts_with("p")) %>%
+  pivot_longer(-c(ftype, MARS, s006), names_to = "vname", values_to = "value")
+glimpse(estacklong)
 
-# Use system2 command: here is an example:
-# cmd1 <- "C:/Users/donbo/Anaconda3/Scripts/tc"
-# args <- c("D:/tcdir/synth10syn20.csv", "2013", 
-#           "--reform", "D:/Dropbox/RPrograms PC/OSPC/syndata4/tax_plans/brk4_1k_2013.json", 
-#           "--dump", 
-#           "--outdir", "D:/tcdir/")
-# system2(cmd1, args)
+wtdns <- estack_rotten %>% group_by(ftype, MARS) %>% summarise(value=sum(s006 / 100)) %>% mutate(vname="_wtdn")
 
-# Do not include --reform and its location if this is a baseline run
+estacksum <- estacklong %>%
+  group_by(ftype, MARS, vname) %>%
+  summarise_at(vars(-s006), list(~sum(. * s006/100) / 1e6)) %>%
+  bind_rows(wtdns)
+glimpse(estacksum)
 
--->
-
-```{r taxcalc}
-# Tax-Calculator user guide:
-# https://pslmodels.github.io/Tax-Calculator/uguide.html
-
-# Use system2 command: here is an example:
-# cmd1 <- "C:/Users/donbo/Anaconda3/Scripts/tc"
-# args <- c("D:/tcdir/synth10syn20.csv", "2013", 
-#           "--reform", "D:/Dropbox/RPrograms PC/OSPC/syndata4/tax_plans/brk4_1k_2013.json", 
-#           "--dump", 
-#           "--outdir", "D:/tcdir/")
-# system2(cmd1, args)
-
-# Do not include --reform and its location if this is a baseline run
+ediffs <- estacksum %>%
+  pivot_wider(names_from = ftype, values_from = value) %>%
+  mutate(diff=syn - puf,
+         pdiff=diff / puf * 100) %>%
+  arrange(MARS, desc(abs(diff)))
 
 
-# pick one of the two paths below
-# stackpath <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/estack_rotten_samp.csv"
-stackpath <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/estack_rotten.csv"
+ediffs %>%
+  arrange(MARS, desc(abs(diff))) %>%
+  # arrange(MARS, desc(abs(pdiff))) %>%
+  left_join(puf_vnames %>% mutate(vname=str_to_lower(vname)) %>% select(vname, vdesc)) %>%
+  group_by(MARS) %>%
+  filter(row_number() <= 10) %>%
+  ungroup %>%
+  kable(digits=1, format.args = list(big.mark=","), format="rst")
+
+# get file sums not by MARS
+tmp <- estacklong %>%
+  select(-MARS) %>%
+  group_by(ftype, vname) %>%
+  summarise_at(vars(-s006), list(~sum(. * s006/100) / 1e6)) %>%
+  pivot_wider(names_from = ftype, values_from = value) %>%
+  mutate(diff=syn - puf,
+         pdiff=diff / puf * 100) %>%
+  arrange(desc(abs(diff)))
+tmp %>% 
+  filter(row_number() <= 10) %>%
+  left_join(puf_vnames %>% mutate(vname=str_to_lower(vname)) %>% select(vname, vdesc)) %>%
+  kable(digits=1, format.args = list(big.mark=","), format="rst")
+
+
+```
+
+
+
+### Run tax calculator
+```{r taxcalc_enhanced}
+esr_samp_path <- paste0(slgfdir, "estack_rotten_samp.csv")
+esr_path <- paste0(slgfdir, "estack_rotten.csv")
+esr_samp_path
+esr_path
+
+year <- 2017
+stackpath <- esr_path
 cmd1 <- "C:/ProgramData/Anaconda3/Scripts/tc"
-args <- c(shQuote(stackpath), "2018",
+args <- c(shQuote(stackpath), year,
           "--dump",
           "--outdir", taxout)
 cmd1
@@ -1372,28 +1806,79 @@ system2(cmd1, args) # CAUTION: this will overwrite any existing output file that
 b <- proc.time()
 b - a  # it can easily take 5-10 minutes depending on the size of the input file
 
-(tc_samp_path <- paste0(taxout, "estack_rotten_samp-18-#-#-#.csv"))
-esr_samp_path
-
-(tc_path <- paste0(taxout, "estack_rotten-18-#-#-#.csv"))
 esr_path
+(tc_path <- paste0(taxout, "estack_rotten-", str_sub(year, 3, 4), "-#-#-#.csv"))
 
-# use either the sample or full output
-# f1 <- esr_samp_path; f2 <- tc_samp_path # sample output
-f1 <- esr_path; f2 <- tc_path # full output
-check <- read_csv(f1) %>% 
+f1 <- stackpath; f2 <- tc_path # full output
+df1 <- read_csv(f1)
+df2 <- read_csv(f2)
+ns(df1)
+ns(df2)
+check <- df1 %>% 
   select(ftype, RECID, RECID_original, s006) %>%
-  left_join(read_csv(f2) %>%
-              select(RECID, taxbc))
+  left_join(df2 %>% select(-s006), by="RECID")
+glimpse(check)
+ns(check)
+count(check, ftype, FLPDYR)
 
-check %>% ht
+check %>% group_by(ftype) %>% summarise(wt=sum(s006 /100))
+
+vars <- c("taxbc", "c09600", "c05800", "c00100", "c62100")
 check %>% 
-  group_by(ftype) %>%
-  summarise(taxbc=sum(s006 / 100 * taxbc) / 1e9) %>%
-  spread(ftype, taxbc) %>%
+  select(ftype, FLPDYR, s006, vars) %>%
+  group_by(ftype, FLPDYR) %>%
+  summarise_at(vars(vars), list(~sum(s006 / 100 * .) / 1e9)) %>%
+  pivot_longer(vars, names_to="vname", values_to = "value") %>%
+  pivot_wider(names_from=ftype, values_from=value) %>%
   mutate(diff=syn - puf, pdiff=diff / puf * 100) %>%
   kable(format="rst", digits=1, format.args = list(big.mark=","))
 
+
+## STUFF BELOW IS NOT UPDTATED 2019-11-14 ----
+# now bring in weights -- SOON - VERIFY that they are in same order as original files ----
+library("R.utils")
+
+# the PUF weights (rotten)
+epz <- gzfile(paste0(slgfdir, ep_weights_gz), open="rb")  
+epw <- read_csv(file=epz, col_types = cols(.default= col_double()))
+glimpse(epw) # 248,591 - good
+
+# the synthetic file weights (rotten)
+esz <- gzfile(paste0(slgfdir, es_weights_gz), open="rb")  
+esw <- read_csv(file=esz, col_types = cols(.default= col_double()))
+glimpse(esw) # 762,749 good
+
+glimpse(check)
+check2 <- check %>%
+  arrange(ftype, RECID_original) %>%
+  mutate(wt=c(epw$WT2018, esw$WT2018))
+ht(check2)
+
+check2 %>% 
+  group_by(ftype) %>%
+  summarise(s006=sum(s006), wt=sum(wt)) %>%
+  pivot_longer(c(s006, wt), names_to="vname", values_to = "value") %>%
+  pivot_wider(names_from=ftype, values_from=value) %>%
+  mutate(diff=syn - puf, pdiff=diff / puf * 100) %>%
+  kable(format="rst", digits=1, format.args = list(big.mark=",")) 
+
+check2 %>% 
+  group_by(ftype) %>%
+  summarise_at(vars(taxbc, c09600, c05800), list(~sum(wt / 100 * .) / 1e9)) %>%
+  pivot_longer(c(taxbc, c09600, c05800), names_to="vname", values_to = "value") %>%
+  pivot_wider(names_from=ftype, values_from=value) %>%
+  mutate(diff=syn - puf, pdiff=diff / puf * 100) %>%
+  kable(format="rst", digits=1, format.args = list(big.mark=","))
+
+check2 %>% 
+  group_by(ftype) %>%
+  # this shows that the problem is with synthesis, not weighting - possibly in the values that go into c09600
+  # mutate(s006=1000) %>% 
+  summarise_at(vars(taxbc, c09600, c05800), list(~sum(s006 / 100 * .) / 1e9)) %>%
+  pivot_longer(c(taxbc, c09600, c05800), names_to="vname", values_to = "value") %>%
+  pivot_wider(names_from=ftype, values_from=value) %>%
+  mutate(diff=syn - puf, pdiff=diff / puf * 100) %>%
+  kable(format="rst", digits=1, format.args = list(big.mark=","))
 
 ```
 
@@ -1579,7 +2064,7 @@ eptrue <- read_csv(paste0(taxout, eptruefn))
 glimpse(eptrue)
 
 # get TaxData-enhanced data files
-epuf <- read_csv(paste0(edir, ep_rotten),
+epuf <- read_csv(paste0(slgfdir, ep_rotten),
                          col_types = cols(.default= col_double()),
                          n_max=-1)
 
@@ -1592,7 +2077,7 @@ ncol(eptrue); ncol(epuf)
 ns(eptrue)
 
 
-esyn <- read_csv(paste0(edir, es_rotten),
+esyn <- read_csv(paste0(slgfdir, es_rotten),
                          col_types = cols(.default= col_double()),
                          n_max=-1)
 ns(esyn)
@@ -1636,12 +2121,12 @@ puf_vnames %>%
 library("R.utils")
 
 # the PUF weights (rotten)
-epz <- gzfile(paste0(edir, ep_weights_gz), open="rb")  
+epz <- gzfile(paste0(slgfdir, ep_weights_gz), open="rb")  
 epw <- read_csv(file=epz, col_types = cols(.default= col_double()))
 glimpse(epw)
 
 # the synthetic file weights (rotten)
-esz <- gzfile(paste0(edir, es_weights_gz), open="rb")  
+esz <- gzfile(paste0(slgfdir, es_weights_gz), open="rb")  
 esw <- read_csv(file=esz, col_types = cols(.default= col_double()))
 glimpse(esw)
 
@@ -1662,7 +2147,7 @@ glimpse(esw)
 
 # Do not include --reform and its location if this is a baseline run
 
-# paste0(edir, ep_rotten)
+# paste0(slgfdir, ep_rotten)
 # "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/cps-matched-puf_rottenpuf.csv"
 eprpath <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/cps-matched-puf_rottenpuf.csv" # rotten input
 
@@ -1735,6 +2220,194 @@ b - a  # it can easily take 5-10 minutes depending on the size of the input file
 #   arrange(ftype) %>% # DJB NEW!
 #   mutate(RECID_original=RECID,
 #          RECID=row_number()) # WILL OVERWRITE OLD RECID!!!!
+
+
+```
+
+
+
+# compare many files selected variables
+```{r}
+# convert all variables to lower case
+# vars <- c("taxbc", "c09600", "c05800", "c00100", "c62100")
+vars <- c("XTOT", "e00100", "e00400", "e04600", "e09600", "c00100", "e00400", "e18400", "e18500", "c62100", "c09600", "taxbc")
+
+#.. file1, the original lowwatch files, unenhanced ----
+ostack_rotten
+glimpse(ostack_rotten)
+change_case
+
+common_names1 <- intersect(names(opuf), names(osyn2a))
+common_names1 %>% sort
+file1 <- bind_rows(opuf %>% filter(MARS!=0) %>% select(common_names1) %>% mutate(ftype="puf"),
+                   osyn2a %>% select(common_names1) %>% mutate(ftype="syn")) %>%
+  setNames(change_case(names(.))) %>%
+  do(prime_spouse_splits(.)) %>%
+  arrange(ftype, RECID) %>%
+  mutate(RECID_original=RECID,
+         RECID=row_number()) %>%
+  select(ftype, weight=s006, one_of(vars)) %>%
+  mutate(grp="lowmatch",
+         etype="unenhanced",
+         fname=ifelse(ftype=="syn", "synpuf20_lowmatch_wfs.csv", "puf2011.csv"))
+glimpse(file1)
+
+sums1 <- file1 %>%
+  group_by(grp, etype, ftype, fname) %>%
+  summarise_at(vars(-c(weight)), list(~sum(. * weight / 100) / 1e6)) %>%
+  pivot_longer(-c(grp, etype, ftype, fname))
+sums1
+
+#.. file2, the original no disclosure files, unenhanced ----
+# synpuf20_no_disclosures_weighted_for_taxdata.csv
+common_names2 <- intersect(names(opuf), names(syn_nd))
+common_names2 %>% sort
+file2 <- bind_rows(opuf %>% filter(MARS!=0) %>% select(common_names2) %>% mutate(ftype="puf"),
+                   syn_nd %>% select(common_names2) %>% mutate(ftype="syn")) %>%
+  setNames(change_case(names(.))) %>%
+  do(prime_spouse_splits(.)) %>%
+  arrange(ftype, RECID) %>%
+  mutate(RECID_original=RECID,
+         RECID=row_number()) %>%
+  select(ftype, weight=s006, one_of(vars)) %>%
+  mutate(grp="nodisclosures",
+         etype="unenhanced",
+         fname=ifelse(ftype=="syn", "synpuf20_no_disclosures_weighted_for_taxdata.csv", "puf2011.csv"))
+glimpse(file2)
+
+sums2 <- file2 %>%
+  group_by(grp, etype, ftype, fname) %>%
+  summarise_at(vars(-c(weight)), list(~sum(. * weight / 100) / 1e6)) %>%
+  pivot_longer(-c(grp, etype, ftype, fname))
+sums2
+
+#.. file3, the no disclosure files, enhanced ----
+epuf_path
+esyn_path
+common_names3 <- intersect(names(epuf), names(esyn))
+common_names3 %>% sort
+file3 <- bind_rows(epuf %>% select(common_names3) %>% mutate(ftype="puf"),
+                   esyn %>% select(common_names3) %>% mutate(ftype="syn")) %>%
+  select(-FLPDYR) %>%
+  arrange(ftype, RECID) %>%
+  mutate(RECID_original=RECID,
+         RECID=row_number()) %>%
+  # first fix the e00200 variables because 541 of these records on the synfile do not sum properly
+  # within Tax-Calculator tolerances although most are extremely close so choose a simple fix
+  mutate(e00200s=e00200 - e00200p) %>%
+  # now fix the truly rotten variables
+  mutate(e00900p=case_when(MARS==2 & e00900!=0 & e00200!=0 ~ e00200p / e00200 * e00900,
+                           MARS==2 & e00900!=0 & e00200==0 ~ e00900 * .5,
+                           MARS!=2 ~ e00900,
+                           TRUE ~ e00900p),
+         e00900s=e00900 - e00900p,
+         e02100p=case_when(MARS==2 & e02100!=0 & e00200!=0 ~ e00200p / e00200 * e02100,
+                           MARS==2 & e02100!=0 & e00200==0 ~ e02100 * .5,
+                           MARS!=2 ~ e02100,
+                           TRUE ~ e02100p),
+         e02100s=e02100 - e02100p) %>%
+  select(ftype, weight=s006, one_of(vars)) %>%
+  mutate(grp="nodisclosures",
+         etype="enhanced",
+         fname=ifelse(ftype=="syn", "puf_synpuf.csv", "puf_rottenpuf.csv"))
+glimpse(file3)
+
+sums3 <- file3 %>%
+  group_by(grp, etype, ftype, fname) %>%
+  summarise_at(vars(-c(weight)), list(~sum(. * weight / 100) / 1e6)) %>%
+  pivot_longer(-c(grp, etype, ftype, fname))
+sums3
+
+
+#.. file4, the no disclosure files, enhanced, through Tax-Calculator, 2013 law ----
+esr_path
+(tc_path <- paste0(taxout, "estack_rotten-", str_sub(year, 3, 4), "-#-#-#.csv"))
+df1 <- read_csv(esr_path)
+df2 <- read_csv(tc_path)
+
+file4 <- df1 %>% 
+  select(ftype, RECID, RECID_original, s006) %>%
+  left_join(df2 %>% select(-s006), by="RECID") %>%
+  select(ftype, weight=s006, one_of(vars)) %>%
+  mutate(grp="nodisclosures",
+         etype="enhanced_tax2013_wtsfile",
+         fname=ifelse(ftype=="syn", "puf_synpuf.csv", "puf_rottenpuf.csv"))
+glimpse(file4)
+
+sums4 <- file4 %>%
+  group_by(grp, etype, ftype, fname) %>%
+  summarise_at(vars(-c(weight)), list(~sum(. * weight / 100) / 1e6)) %>%
+  pivot_longer(-c(grp, etype, ftype, fname))
+sums4
+
+#.. combine and examine ----
+grpall <- bind_rows(sums1, sums2, sums3, sums4) %>% rename(vname=name) %>% ungroup
+grpall %>% filter(vname=="XTOT")
+
+vlab_sort <- c("agi", "XTOT", "e00400", "e18400", "e18500", "AMTI", "AMT")
+etype_sort <- c("unenhanced", "enhanced", "enhanced_tax2013_wtsfile")
+grp_comp <- grpall %>%
+  select(-fname) %>%
+  pivot_wider(names_from="ftype") %>%
+  mutate(diff=puf - syn,
+         pdiff=diff / puf * 100) %>%
+  left_join(puf_vnames %>% mutate(vname=change_case(vname)) %>% select(vname, vdesc)) %>%
+  mutate(vlab=case_when(vname %in% c("c00100", "e00100") ~ "agi",
+                        vname=="c09600" ~ "AMT",
+                        vname=="c62100" ~ "AMTI",
+                        TRUE ~ vname)) %>%
+  mutate(vlab=factor(vlab, levels=vlab_sort),
+         etype=factor(etype, levels=etype_sort)) %>%
+  arrange(vlab, grp, etype) %>%
+  select(vlab, grp, etype, puf, syn, diff, pdiff, vdesc, vname)
+
+grp_comp %>%
+  kable(digits=2, format.args = list(big.mark=","), format="rst")
+
+
+```
+
+
+# What happened to e00400 between the lowmatch and nodisclosures files, unenhanced? with weighting added $16b!!
+```{r}
+# how do the unweighted files compare??
+# osyn2a vs syn_nd
+glimpse(osyn2a)
+glimpse(syn_nd)
+setdiff(names(osyn2a), names(syn_nd))
+
+stack <- osyn2a %>% mutate(ftype="lowmatch") %>%
+  bind_rows(syn_nd %>% mutate(ftype="nodisclosures")) %>%
+  mutate(income=E00200 + E00300 + E00600 + E01700) %>%
+  select(RECID, income, E00200, E00400, S006, MARS, ftype)
+glimpse(stack)
+
+stack %>%
+  group_by(ftype) %>%
+  summarise(E00200wtd=sum(E00200 * S006) / 100 / 1e6,
+            E00400wtd=sum(E00400 * S006) / 100 / 1e6,
+            E00200=sum(E00200),
+            E00400=sum(E00400)) %>%
+  pivot_longer(-ftype) %>%
+  pivot_wider(names_from = ftype) %>%
+  mutate(diff=nodisclosures - lowmatch,
+         pdiff=diff / lowmatch * 100)
+
+# break it down by income range
+ycuts <- c(-Inf, 0, 50e3, 100e3, 200e3, 500e3, 1e6, Inf)
+stack %>%
+  mutate(ygroup=cut(income, ycuts)) %>%
+  group_by(ftype, ygroup) %>%
+  summarise(wtdn=sum(S006 / 100),
+            E00200wtd=sum(E00200 * S006) / 100 / 1e6,
+            E00400wtd=sum(E00400 * S006) / 100 / 1e6) %>%
+  pivot_longer(-c(ftype, ygroup)) %>%
+  pivot_wider(names_from = ftype) %>%
+  mutate(diff=nodisclosures - lowmatch,
+         pdiff=diff / lowmatch * 100) %>%
+  select(name, ygroup, everything()) %>%
+  arrange(name, ygroup)
+
 
 
 ```
