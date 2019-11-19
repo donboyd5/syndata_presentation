@@ -15,7 +15,7 @@ options(tibble.print_max = 60, tibble.print_min = 60) # if more than 60 rows, pr
 # library("vctrs")
 library("knitr")
 
-library("ipoptr")
+library("nloptr")
 
 # devtools::install_github("donboyd5/btools")
 library("btools") # library that I created (install from github)
@@ -24,6 +24,7 @@ library("btools") # library that I created (install from github)
 #****************************************************************************************************
 #                functions ####
 #****************************************************************************************************
+source("./r/functions.r")
 source("./r/functions_weighting.r")
 
 
@@ -33,6 +34,9 @@ source("./r/functions_weighting.r")
 #.. the no disclosure files, enhanced ----
 epuf_path <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/puf_rottenpuf.csv"
 esyn_path <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/puf_synpuf.csv"
+
+djb_dir <- "D:/tax_data/djb_presentation/"
+optout <- paste0(djb_dir, "opt_output/")
 
 
 #****************************************************************************************************
@@ -77,14 +81,14 @@ estack %>%
 #****************************************************************************************************
 #                run it through 2013 tax-calculator to get agi and other key variables that we want to use in targeting ####
 #****************************************************************************************************
-djb <- "D:/tax_data/djb_presentation/"
+
 epath <- paste0(djb, "estack.csv")
 estack %>% write_csv(paste0(djb, "estack.csv"))
 
 cmd1 <- "C:/ProgramData/Anaconda3/Scripts/tc"
 args <- c(shQuote(epath), "2013",
           "--dump",
-          "--outdir", djb)
+          "--outdir", djb_dir)
 cmd1
 args
 
@@ -103,7 +107,7 @@ b - a  # it can easily take 5-10 minutes depending on the size of the input file
 #****************************************************************************************************
 #                merge in tax-calculator results and SAVE ####
 #****************************************************************************************************
-(tc_path <- paste0(djb, "estack-13-#-#-#.csv"))
+(tc_path <- paste0(djb_dir, "estack-13-#-#-#.csv"))
 tcvars <- c("RECID", "c00100", "c62100", "taxbc", "c09600", "c05800")
 
 df2 <- read_csv(tc_path, col_types = cols(.default= col_double()), n_max=-1)
@@ -120,7 +124,8 @@ estack_tc %>% saveRDS(paste0(djb, "estack_tc.rds"))
 #****************************************************************************************************
 #                prepare to reweight ####
 #****************************************************************************************************
-estack_tc <- readRDS(paste0(djb, "estack_tc.rds"))
+# start reweighting here ----
+estack_tc <- readRDS(paste0(djb_dir, "estack_tc.rds"))
 
 #.. 1. Define subsets that have approximately 500-1000 records ----
 puf_from_tc <- estack_tc %>%
@@ -287,7 +292,7 @@ evars <- setdiff(names(estack_tc_groups)[str_sub(names(estack_tc_groups), 1, 1)=
 
 tcvars <- c("c00100", "taxbc", "c09600", "c05800", "c62100") # the subset of tax-calculator variables that we want to target
 cbasevars <- c(tcvars, epvars)
-cbasevars
+cbasevars %>% sort
 
 #....2b) get constraint coefficients ----
 ns(estack_tc_groups)
@@ -359,63 +364,316 @@ ccsums <- all_constraint_vals %>%
 glimpse(ccsums)
 count(ccsums, ftype)
 ccsums %>% filter(ugroup==3, ftype=="syn")
-# ccsums <- pdiffs %>%
-#   group_by(ugroup, variable) %>%
-#   summarise_at(vars(puf, syn, syn_nd, syn_diff, syn_nd_diff), ~sum(.))
-
-
-# combine them
-# targets <- ccsums %>% 
-#   rename(good_constraint=constraint_var) %>%
-#   right_join(good_con, by=c("ftype", "ugroup", "good_constraint"))
-# targets
-# targets %>% filter(ftype=="syn", ugroup==3)
-# targets %>% filter(ftype=="syn", target==0, file_value!=0) # 1432 in the entire file
-# targets %>% filter(ftype=="syn", target==!0, file_value==0) # none in the file
-
-
-
-#.3. Prepare the constraint bounds ----
-# e00400 is #20 on the list
-# e09800 e58990 e03400 e07240 p08000 e07600 e24518
-# create priority groupings and assign tolerances
-# unique(str_extract(all_constraint_vars, "[^_]+"))
-# tcvars # not in the group above
-# tolerances <- tibble(vname=cbasevars) %>%
-#   mutate(tol=case_when(vname %in% tcvars ~ .05,
-#                        TRUE ~ Inf))
-# tolerances
-# tolerances %>% filter(vname %in% vars)
-# cbasevars
-
-# use the tolerances to put bounds around the targets
-# bounds <- targets2 %>%
-#   mutate(vname=str_extract(good_constraint, "[^_]+")) %>%
-#   left_join(tolerances %>% select(vname, tol)) %>%
-#   mutate(clb=target - tol * abs(target),
-#          cub=target + tol * abs(target)) %>%
-#   # ensure that logical inconsistencies cannot occur
-#   # .. counts cannot be negative, and sumpos cannot be negative
-#   mutate(clb=ifelse(str_detect(good_constraint, "_n") & (clb < 0), 0, clb),
-#          cub=ifelse(str_detect(good_constraint, "_n") & (cub < 0), 0, cub),
-#          clb=ifelse(str_detect(good_constraint, "_sumpos") & (clb < 0), 0, clb),
-#          cub=ifelse(str_detect(good_constraint, "_sumneg") & (cub > 0), 0, cub)) %>%
-#   select(-vdesc, everything(), vdesc)
-# bounds
-# bounds %>% filter(good_constraint=="taxbc_npos", ftype=="syn_nd", ugroup==7)
-# bounds %>% filter(ftype=="syn_nd", ugroup==7) %>% print(n = Inf)
-# count(bounds, ftype)
-
-# bounds2 <- bounds %>%
-#   filter(!())
-
-# ONETIME (every once in a while) - save and/or load prep items ----
-# save.image(file = "d:/temp/prep.RData")
-# RELOAD load(file = "d:/temp/prep.RData") ----
-# end ONETIME save ----
-
 
 #.4. Run the optimization ----
+# WFS ----
+count(ccsums, constraint_var)
+targets <- ccsums %>% 
+  rename(good_constraint=constraint_var) %>%
+  right_join(good_con %>% separate(col=good_constraint, into=c("vname", "fn"), remove=FALSE),
+             by=c("ftype", "ugroup", "good_constraint"))
+count(targets, ftype)
+
+targets_use <- targets %>%
+  filter(!(target==0 & file_value==0)) %>%
+  filter(file_value!=0)
+
+targets_use %>% filter(ugroup==1) # 129 targets
+# we have 118 to 154 targets per group
+targets_use %>%
+  group_by(ugroup) %>%
+  summarise(n=n()) %>%
+  ungroup %>%
+  summarise(ntargets=sum(n), ngroups=n(), n_min=min(n), n_mdn=median(n), n_max=max(n))
+# ntargets ngroups n_min n_mdn n_max
+# <int>   <int> <int> <dbl> <int>
+#   1    17814     124   122  142.   158
+
+count(targets_use, vname)
+
+# prepare for optim ----
+# obj_wfs(wts, inputs)
+# 628.3316
+
+
+df <- rungroup(6, targets_use, estack_tc_groups, ccoef, maxiter=50)
+
+df <- rungroup_par(6, targets_use, maxiter=50)
+
+tmp <- readRDS(paste0(optout, "g_6.rds"))
+names(tmp)
+tmp$elapsed
+tmp$result$message
+tmp$result$objective
+length(tmp$result$solution)
+
+wts_opt <- ldply(5:7, rungroup, targets_use, estack_tc_groups, ccoef, maxiter=50, .progress = "text")
+
+wts_optp <- ldply(5:7, rungroup_par, targets_use, maxiter=50, .progress = "text")
+
+packages <- c("magrittr", "tidyverse", "nloptr")
+xport <- c("estack_tc_groups", "ccoef", "obj_wfs", "grad_wfs", "calc_constraints")
+popts <- list(.packages=packages, .export=xport)
+# popts <- list(.packages=packages)
+
+#.. preparation needed for a parallel run ----
+library("doParallel")
+cl <- makeCluster(4)
+registerDoParallel(cl)
+# NOTE: when all done, run: stopCluster(cl)
+showConnections()
+#.. end parallel prep ----
+
+(ugroups <- estack_tc_groups$ugroup %>% unique %>% sort)
+ugroups <- 5:7
+
+a <- proc.time()
+wts_opt_par <- ldply(ugroups, rungroup_par, targets_use, maxiter=50, .progress = "text", .parallel = TRUE, .paropts=popts)
+b <- proc.time()
+b - a
+
+stopCluster(cl)
+
+saveRDS(wts_opt_par, paste0(djb_dir, "wts_opt_par.rds"))
+
+
+
+# run in parallel with multidplyr ----
+library("multidplyr")
+cluster <- new_cluster(6)
+# parallel::stopCluster(cluster)
+
+# choose one of the following
+parallel <- TRUE
+# parallel <- FALSE
+
+a <- proc.time()
+packages <- c("magrittr", "tidyverse", "nloptr")
+xport <- c("obj_wfs", "grad_wfs", "calc_constraints", "rungroup_mdplyr", "targets_use") # objects needed
+
+if(parallel){
+  # set the latest versions of functions, etc. up for the run
+  cluster_copy(cluster, xport)
+  cluster_library(cluster, packages)
+}
+
+opt_pre <- ccoef %>%
+  filter(ftype=="syn") %>%
+  # filter(ugroup %in% 5:7) %>%
+  select(RECID, wt0, ugroup, targets_use$good_constraint) %>%
+  group_by(ugroup) %>%
+  {if (parallel) partition(., cluster) else .}
+
+opt <- opt_pre %>%
+  do(rungroup_mdplyr(., targets_use, maxiter=500)) %>%
+  {if (parallel) collect(.) else .} %>%
+  ungroup
+b <- proc.time()
+b - a # seconds
+(b - a) / 60 # minutes
+
+fpath <- paste0(djb_dir, "wts_opt.rds")
+saveRDS(opt, fpath)
+
+glimpse(opt)
+count(opt, ugroup)
+nrow(opt)
+count(estack_tc, ftype)
+
+compare <- estack_tc %>%
+  mutate(weight=s006 / 100) %>%
+  bind_rows(estack_tc %>% filter(ftype=="syn") %>% mutate(ftype="synopt") %>% left_join(opt %>% select(RECID, weight)))
+
+priority1_vars <- c("wt", 
+                    "c00100", "e00200", "e00300", "e00400", "e00600",
+                    "e01500", "e02000", "e02500", "p23250",
+                    "e18400",
+                    "e04600", "e04800",
+                    "taxbc", "c62100", "c09600")
+
+compare %>%
+  mutate(one=1) %>%
+  group_by(ftype) %>%
+  summarise_at(vars(one, one_of(priority1_vars), c05800), list(~ sum(. * weight) / 1e6)) %>%
+  pivot_longer(-ftype) %>%
+  pivot_wider(names_from=ftype) %>%
+  mutate_at(vars(syn, synopt), list(diff=~. - puf, pdiff=~(. - puf) / puf * 100)) %>%
+  kable(digits=2, format="rst", format.args = list(big.mark=","))
+
+tmp <- estack_tc %>%
+  filter(ftype=="syn") %>%
+  select(RECID, ftype, s006, taxbc) %>%
+  left_join(opt)
+ht(tmp)
+sum(tmp$weight * tmp$taxbc) / 1e6
+sum(tmp$s006 / 100 * tmp$taxbc) / 1e6
+estack_tc %>%
+  group_by(ftype) %>%
+  summarise(taxbc=sum(taxbc * s006/100) / 1e6)
+targets_use %>% 
+  filter(good_constraint=="taxbc_sumpos") %>%
+  summarise(target=sum(target) / 1e6,
+            file_value=sum(file_value) / 1e6)
+
+# we are missing a few groups! they are some numbering gaps
+# e.g., ugroup==2
+ccoef %>% filter(ugroup==2) # has no records
+targets_use %>% filter(ugroup==2) # has no targets
+
+# Call `rlang::last_error()` to see a backtrace.
+# Call `rlang::last_trace()` to see the full backtrace
+
+# glimpse(opt)
+# count(opt, ugroup)
+# ccoef %>% group_by(ftype) %>% summarise(rmin=min(RECID), rmax=max(RECID))
+# ffw2 %>% group_by(ftype) %>% summarise(n=n(), rmin=min(RECID), rmax=max(RECID), romin=min(RECID_original), romax=max(RECID_original))
+
+
+count(opt, ugroup)
+
+
+
+# old and testing below here ----
+
+grad_wfs(wts, inputs)
+grad_wfs(x0, inputs)[1:10] %>% t
+grad_vec[1:10]
+# starting point and bounds on the weights
+xlb <- rep(1, length(wts))
+x0 <- pmax(wts, 1)
+xub <- pmax(wts*2, 10e3)
+
+cbind(xlb, x0, xub)
+
+which(xlb>x0)
+which(xub<x0)
+
+
+opts <- list("algorithm"="NLOPT_LD_MMA",
+             "xtol_rel"=1.0e-8,
+             "maxeval"=500)
+result <- nloptr(x0, 
+                 eval_f=obj_wfs,
+                 eval_grad_f = grad_wfs,
+                 lb = xlb, ub = xub,
+                 opts = opts, inputs=inputs)
+str(result)
+
+# tmp <- check.derivatives(.x=x0, func=obj_wfs, func_grad=grad_wfs, 
+#                    check_derivatives_print='all', inputs=inputs)
+
+
+check <- tibble(cname=inputs$target_names,
+                pweight=inputs$priority_weights,
+                fileval=fileval_vec,
+                target=inputs$target_vec,
+                optval=calc_constraints(result$solution, inputs$ccoef, inputs$target_names),
+                diff0=fileval - target,
+                diff_opt=optval - target,
+                pdiff=diff_opt / target * 100,
+                apdiff=abs(pdiff))
+glimpse(check)
+check$pdiff %>% round(2)
+check %>% arrange(-apdiff)
+check %>% arrange(apdiff)
+
+wcheck <- tibble(xlb, x0, sol=result$solution, xub)
+
+v <- str_subset(names(d), "e00400")
+
+
+ccmat[c(1:10, 100:110), c(1:10, 100:110)]
+nrow(ccmat)
+dim(ccmat)
+length(wts)
+x0 <- pmax(wts, 1)
+
+
+ccmat <- as.matrix(inputs$ccoef[, inputs$target_names])
+calc_vec <- colSums(ccmat * x0) # 1 sum per constraint
+grad_vec_part <- {2 * inputs$priority_weights * (calc_vec - inputs$target_vec)} / {inputs$scale_vec^2}
+grad_vec <- (ccmat %*% grad_vec_part)[, 1]
+grad_vec[1:10]
+
+get_named_vec <- function(vec, vec_names, target_names){
+  names(vec) <- vec_names
+  return(vec[target_names])
+}
+
+target_names <- intersect(targ_samp$good_constraint, names(ccoef_samp))
+target_vec <- get_named_vec(vec = targ_samp_final$target,
+                            vec_names=targ_samp_final$good_constraint,
+                            target_names=target_names)
+priority_weights <- get_named_vec(vec = targ_samp_final$priority_weight,
+                                  vec_names = targ_samp_final$good_constraint,
+                                  target_names = target_names)
+fileval_vec <- get_named_vec(vec = targ_samp_final$file_value,
+                             vec_names = targ_samp_final$good_constraint,
+                             target_names = target_names)
+scale_vec <- ifelse(target_vec==0, fileval_vec, target_vec)
+
+inputs <- list()
+inputs$target_names <- target_names
+inputs$target_vec <- target_vec
+inputs$priority_weights <- priority_weights
+inputs$scale_vec <- scale_vec
+inputs$ccoef <- ccoef_samp
+
+
+
+
+# for a single constraint t we have
+# p((w1*a1 + w2*a2 + w3*a3)/s - t/s)^2
+# using symbols that work
+# p((x*a + y*b + z*c)/s - t/s)^2
+# g(x) = n / d
+#   n <- 2ap(ax + yb + cz -t)
+#   d <- s^2
+
+# g(w1) 2*a1*p*(w1*a1 + w2*a2 + w3*a3 - t) = 2*a1*p*(calc - t)
+# g(w2) 2*a2*p*(calc - t)
+# g(x) p2(xa + yb +zc - t)a
+# test it out ----
+grp <- 6 # 128 targets
+targ_samp <- targets_use %>% filter(ugroup==grp)
+syn_samp <- estack_tc_groups %>% filter(ftype=="syn", ugroup==grp) %>% ungroup
+glimpse(syn_samp)
+targ_samp %>% filter(str_detect(good_constraint, "c00100"))
+targ_samp %>% filter(str_detect(good_constraint, "taxbc"))
+# syn_samp %>% summarise(taxbc_sumpos=sum((taxbc>0) * taxbc * s006 / 100))
+
+targ_samp %>% filter(str_detect(good_constraint, "e00400"))
+syn_samp %>% summarise(taxbc_sumpos=sum((e00400>0) * e00400 * s006 / 100))
+count(targ_samp, vname)
+count(targ_samp, fn)
+
+priority1_vars <- c("wt", "c00100", "e00200", "e00300", "e00400", "e01500", "p23250", "taxbc", "c62100", "c09600")
+targ_samp_final <- targ_samp %>%
+  mutate(priority_weight=case_when(vname %in% priority1_vars ~ 100,
+                                   TRUE ~ 1))
+ccoef_samp <- ccoef %>%
+  filter(ftype=="syn", ugroup==grp)
+
+tnames <- intersect(targ_samp$good_constraint, names(ccoef_samp))
+tvec <- targ_samp_final$target
+names(tvec) <- targ_samp_final$good_constraint
+tvec <- tvec[tnames]
+
+pweights <- targ_samp_final$priority_weight
+names(pweights) <- targ_samp_final$good_constraint
+pweights <- pweights[tnames]
+
+convec <- calc_constraints(wts, ccoef_samp, tnames)
+
+tscale <- ifelse(tvec==0, convec, tvec)
+any(tscale==0)
+
+wts <- syn_samp$s006 / 100
+
+diff <- convec / tscale - tvec / tscale
+diff2 <- diff^2
+obj <- sum(diff2 * pweights)
+
 # parallel version
 library("multidplyr")
 cluster <- new_cluster(6)
@@ -465,304 +723,4 @@ b - a # seconds
 fname <- paste0("d:/temp/opt_", ftype_opt, ".rds")
 saveRDS(opt, fname)
 
-
-
-# WFS ----
-count(ccsums, constraint_var)
-targets <- ccsums %>% 
-  rename(good_constraint=constraint_var) %>%
-  right_join(good_con %>% separate(col=good_constraint, into=c("vname", "fn"), remove=FALSE),
-             by=c("ftype", "ugroup", "good_constraint"))
-count(targets, ftype)
-
-targets_use <- targets %>%
-  filter(!(target==0 & file_value==0)) %>%
-  filter(file_value!=0)
-
-targets_use %>% filter(ugroup==1) # 129 targets
-# we have 118 to 154 targets per group
-targets_use %>%
-  group_by(ugroup) %>%
-  summarise(n=n()) %>%
-  ungroup %>%
-  summarise(ntargets=sum(n), ngroups=n(), n_min=min(n), n_mdn=median(n), n_max=max(n))
-# ntargets ngroups n_min n_mdn n_max
-# <int>   <int> <int> <dbl> <int>
-#   1    17814     124   122  142.   158
-
-count(targets_use, vname)
-
-# test it out ----
-grp <- 6 # 128 targets
-targ_samp <- targets_use %>% filter(ugroup==grp)
-syn_samp <- estack_tc_groups %>% filter(ftype=="syn", ugroup==grp) %>% ungroup
-glimpse(syn_samp)
-targ_samp %>% filter(str_detect(good_constraint, "c00100"))
-targ_samp %>% filter(str_detect(good_constraint, "taxbc"))
-# syn_samp %>% summarise(taxbc_sumpos=sum((taxbc>0) * taxbc * s006 / 100))
-
-targ_samp %>% filter(str_detect(good_constraint, "e00400"))
-syn_samp %>% summarise(taxbc_sumpos=sum((e00400>0) * e00400 * s006 / 100))
-count(targ_samp, vname)
-count(targ_samp, fn)
-
-priority1_vars <- c("wt", "c00100", "e00200", "e00300", "e00400", "e01500", "p23250", "taxbc", "c62100", "c09600")
-targ_samp_final <- targ_samp %>%
-  mutate(priority_weight=case_when(vname %in% priority1_vars ~ 100,
-                                   TRUE ~ 1))
-ccoef_samp <- ccoef %>%
-  filter(ftype=="syn", ugroup==grp)
-
-tnames <- intersect(targ_samp$good_constraint, names(ccoef_samp))
-tvec <- targ_samp_final$target
-names(tvec) <- targ_samp_final$good_constraint
-tvec <- tvec[tnames]
-
-pweights <- targ_samp_final$priority_weight
-names(pweights) <- targ_samp_final$good_constraint
-pweights <- pweights[tnames]
-
-convec <- calc_constraints(wts, ccoef_samp, tnames)
-
-tscale <- ifelse(tvec==0, convec, tvec)
-any(tscale==0)
-
-wts <- syn_samp$s006 / 100
-
-diff <- convec / tscale - tvec / tscale
-diff2 <- diff^2
-obj <- sum(diff2 * pweights)
-
-# prepare for optim ----
-get_named_vec <- function(vec, vec_names, target_names){
-  names(vec) <- vec_names
-  return(vec[target_names])
-}
-
-target_names <- intersect(targ_samp$good_constraint, names(ccoef_samp))
-target_vec <- get_named_vec(vec = targ_samp_final$target,
-                            vec_names=targ_samp_final$good_constraint,
-                            target_names=target_names)
-priority_weights <- get_named_vec(vec = targ_samp_final$priority_weight,
-                                  vec_names = targ_samp_final$good_constraint,
-                                  target_names = target_names)
-fileval_vec <- get_named_vec(vec = targ_samp_final$file_value,
-                             vec_names = targ_samp_final$good_constraint,
-                             target_names = target_names)
-scale_vec <- ifelse(target_vec==0, fileval_vec, target_vec)
-
-inputs <- list()
-inputs$target_names <- target_names
-inputs$target_vec <- target_vec
-inputs$priority_weights <- priority_weights
-inputs$scale_vec <- scale_vec
-inputs$ccoef <- ccoef_samp
-
-ccmat[c(1:10, 100:110), c(1:10, 100:110)]
-nrow(ccmat)
-dim(ccmat)
-length(wts)
-x0 <- pmax(wts, 1)
-
-
-ccmat <- as.matrix(inputs$ccoef[, inputs$target_names])
-calc_vec <- colSums(ccmat * x0) # 1 sum per constraint
-grad_vec_part <- {2 * inputs$priority_weights * (calc_vec - inputs$target_vec)} / {inputs$scale_vec^2}
-grad_vec <- (ccmat %*% grad_vec_part)[, 1]
-grad_vec[1:10]
-
-djb3 <- grad_veci * ccmat
-djb3 <- ccmat %*% grad_veci
-djb3[1:10, 1]
-
-djb3 <- grad_veci %*% t(ccmat)
-dim(djb3)
-colSums(djb3)
-djb3[1, 1:10]
-
-# 6.506512e-05 6.520154e-05 1.837564e-06
-
-grad_vec <- rowSums(grad_mat)
-grad_vec[1:10]
-sum(grad_mat)
-# gma <- 2 * ccmat * inputs$priority_weights
-# gmb <- (calc_vec - inputs$target_vec) / {inputs$scale_vec^2}
-# gmc <- gma * gmb
-# gv <- rowSums(gmc)
-# gv[1:10]
-
-grad_vec <- rowSums(grad_mat)
-grad_vec[1:10]
-# grad={2 * coeff * priority.weight * (calc - target)} / {scale^2}
-
-o1 <- obj_wfs(x0, inputs)
-i <- 10
-x1 <- x0; x1[i] <- x1[i] + 1
-o2 <- obj_wfs(x1, inputs)
-o2 - o1
-
-# for a single constraint t we have
-# p((w1*a1 + w2*a2 + w3*a3)/s - t/s)^2
-# using symbols that work
-# p((x*a + y*b + z*c)/s - t/s)^2
-# g(x) = n / d
-#   n <- 2ap(ax + yb + cz -t)
-#   d <- s^2
-
-# g(w1) 2*a1*p*(w1*a1 + w2*a2 + w3*a3 - t) = 2*a1*p*(calc - t)
-# g(w2) 2*a2*p*(calc - t)
-# g(x) p2(xa + yb +zc - t)a
-
-m <- matrix(1:12, nrow=4)
-v <- c(2, 4, 6, 8)
-m * v
-rowSums(m * v)
-
-obj_wfs <- function(w, inputs){
-  constraints_vec <- calc_constraints(w, inputs$ccoef, inputs$target_names)
-  diff <- constraints_vec / inputs$scale_vec - inputs$target_vec / inputs$scale_vec
-  obj <- sum(diff^2 * inputs$priority_weights)
-  return(obj)
-}
-
-obj_wfs(wts, inputs)
-# 628.3316
-
-grad_wfs <- function(w, inputs){
-  # gradient of objective function - a vector length w
-  # giving the partial derivatives of obj wrt each w[i]
-  ccmat <- as.matrix(inputs$ccoef[, inputs$target_names])
-  calc_vec <- colSums(ccmat * w) # 1 sum per constraint
-  grad_vec_part <- {2 * inputs$priority_weights * (calc_vec - inputs$target_vec)} / {inputs$scale_vec^2}
-  grad_vec <- (ccmat %*% grad_vec_part)[, 1]
-  return(grad_vec)
-}
-
-grad_wfs(wts, inputs)
-grad_wfs(x0, inputs)[1:10] %>% t
-grad_vec[1:10]
-# starting point and bounds on the weights
-xlb <- rep(1, length(wts))
-x0 <- pmax(wts, 1)
-xub <- pmax(wts*2, 10e3)
-
-cbind(xlb, x0, xub)
-
-which(xlb>x0)
-which(xub<x0)
-
-
-opts <- list("algorithm"="NLOPT_LD_MMA",
-             "xtol_rel"=1.0e-8,
-             "maxeval"=500)
-result <- nloptr(x0, 
-                 eval_f=obj_wfs,
-                 eval_grad_f = grad_wfs,
-                 lb = xlb, ub = xub,
-                 opts = opts, inputs=inputs)
-str(result)
-
-# tmp <- check.derivatives(.x=x0, func=obj_wfs, func_grad=grad_wfs, 
-#                    check_derivatives_print='all', inputs=inputs)
-
-
-check <- tibble(cname=inputs$target_names,
-                pweight=inputs$priority_weights,
-                fileval=fileval_vec,
-                target=inputs$target_vec,
-                optval=calc_constraints(result$solution, inputs$ccoef, inputs$target_names),
-                diff0=fileval - target,
-                diff_opt=optval - target,
-                pdiff=diff_opt / target * 100,
-                apdiff=abs(pdiff))
-glimpse(check)
-check$pdiff %>% round(2)
-check %>% arrange(-apdiff)
-check %>% arrange(apdiff)
-
-wcheck <- tibble(xlb, x0, sol=result$solution, xub)
-
-v <- str_subset(names(d), "e00400")
-
-
-
-rungroup <- function(ugroup.in, targets_use, estack_tc_groups, ccoef, maxiter=10){
-  a <- proc.time()
-  
-  # set up the targets
-  priority1_vars <- c("wt", "c00100", "e00200", "e00300", "e00400", "e01500", "p23250", "taxbc", "c62100", "c09600")
-  targ_samp <- targets_use %>%
-    filter(ugroup==ugroup.in) %>%
-    mutate(priority_weight=case_when(vname %in% priority1_vars ~ 100,
-                                     TRUE ~ 1))
-  # set up the data subset
-  syn_samp <- estack_tc_groups %>% 
-    filter(ftype=="syn", ugroup==ugroup.in) %>% 
-    ungroup
-
-  # set up the constraint coefficients
-  ccoef_samp <- ccoef %>%
-    filter(ftype=="syn", ugroup==ugroup.in)
-  
-  # set up the inputs list
-  get_named_vec <- function(vec, vec_names, target_names){
-    names(vec) <- vec_names
-    return(vec[target_names])
-  }
-  
-  target_names <- intersect(targ_samp$good_constraint, names(ccoef_samp))
-  
-  target_vec <- get_named_vec(vec = targ_samp$target,
-                              vec_names = targ_samp$good_constraint,
-                              target_names = target_names)
-  
-  priority_weights <- get_named_vec(vec = targ_samp$priority_weight,
-                                    vec_names = targ_samp$good_constraint,
-                                    target_names = target_names)
-  
-  fileval_vec <- get_named_vec(vec = targ_samp$file_value,
-                               vec_names = targ_samp$good_constraint,
-                               target_names = target_names)
-  
-  scale_vec <- ifelse(target_vec==0, fileval_vec, target_vec)
-  
-  inputs <- list()
-  inputs$target_names <- target_names
-  inputs$target_vec <- target_vec
-  inputs$priority_weights <- priority_weights
-  inputs$scale_vec <- scale_vec
-  inputs$ccoef <- ccoef_samp
-  
-  # starting point and bounds on the weights
-  wts <- syn_samp$s006 / 6
-  xlb <- rep(1, length(wts))
-  x0 <- pmax(wts, 1)
-  xub <- pmax(wts*2, 10e3)
-  
-  # call the optimizer
-  opts <- list("algorithm"="NLOPT_LD_MMA",
-               "xtol_rel"=1.0e-8,
-               "maxeval"=maxiter)
-  result <- nloptr(x0, 
-                   eval_f=obj_wfs,
-                   eval_grad_f = grad_wfs,
-                   lb = xlb, ub = xub,
-                   opts = opts, inputs=inputs)
-  
-  outputs <- list()
-  outputs$inputs <- inputs
-  outputs$result <- result
-
-  b <- proc.time()
-  # print(b - a)
-  outputs$elapsed <- b - a
-  return(outputs)
-}
-
-tmp <- rungroup(6, targets_use, estack_tc_groups, ccoef, maxiter=500)
-names(tmp)
-tmp$elapsed
-tmp$result$message
-tmp$result$objective
-length(tmp$result$solution)
 

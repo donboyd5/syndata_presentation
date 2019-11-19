@@ -43,11 +43,283 @@ calc_constraints <- function(weights, data, constraint_vars){
 # }
 
 
+#****************************************************************************************************
+#                wfs calling functions ####
+#****************************************************************************************************
+rungroup <- function(ugroup.in, targets_use, estack_tc_groups, ccoef, maxiter=10){
+  a <- proc.time()
+  
+  # set up the targets
+  priority1_vars <- c("wt", "c00100", "e00200", "e00300", "e00400", "e01500", "p23250", "taxbc", "c62100", "c09600")
+  targ_samp <- targets_use %>%
+    filter(ugroup==ugroup.in) %>%
+    mutate(priority_weight=case_when(vname %in% priority1_vars ~ 100,
+                                     TRUE ~ 1))
+  # set up the data subset
+  syn_samp <- estack_tc_groups %>% 
+    filter(ftype=="syn", ugroup==ugroup.in) %>% 
+    ungroup
+  
+  # set up the constraint coefficients
+  ccoef_samp <- ccoef %>%
+    filter(ftype=="syn", ugroup==ugroup.in)
+  
+  # set up the inputs list
+  get_named_vec <- function(vec, vec_names, target_names){
+    names(vec) <- vec_names
+    return(vec[target_names])
+  }
+  
+  target_names <- intersect(targ_samp$good_constraint, names(ccoef_samp))
+  
+  target_vec <- get_named_vec(vec = targ_samp$target,
+                              vec_names = targ_samp$good_constraint,
+                              target_names = target_names)
+  
+  priority_weights <- get_named_vec(vec = targ_samp$priority_weight,
+                                    vec_names = targ_samp$good_constraint,
+                                    target_names = target_names)
+  
+  fileval_vec <- get_named_vec(vec = targ_samp$file_value,
+                               vec_names = targ_samp$good_constraint,
+                               target_names = target_names)
+  
+  scale_vec <- ifelse(target_vec==0, fileval_vec, target_vec)
+  
+  inputs <- list()
+  inputs$target_names <- target_names
+  inputs$target_vec <- target_vec
+  inputs$priority_weights <- priority_weights
+  inputs$scale_vec <- scale_vec
+  inputs$ccoef <- ccoef_samp
+  
+  # starting point and bounds on the weights
+  wts <- syn_samp$s006 / 6
+  xlb <- rep(1, length(wts))
+  x0 <- pmax(wts, 1)
+  xub <- pmax(wts*2, 10e3)
+  
+  # call the optimizer
+  opts <- list("algorithm"="NLOPT_LD_MMA",
+               "xtol_rel"=1.0e-8,
+               "maxeval"=maxiter)
+  result <- nloptr(x0, 
+                   eval_f=obj_wfs,
+                   eval_grad_f = grad_wfs,
+                   lb = xlb, ub = xub,
+                   opts = opts, inputs=inputs)
+  
+  outputs <- list()
+  outputs$inputs <- inputs
+  outputs$result <- result
+  
+  b <- proc.time()
+  # print(b - a)
+  outputs$elapsed <- b - a
+  
+  outdir <- "D:/tax_data/djb_presentation/opt_output/"
+  fname <- paste0("g_", ugroup.in, ".rds")
+  saveRDS(outputs, paste0(outdir, fname))
+  
+  df <- tibble(RECID=syn_samp$RECID, ugroup=ugroup.in, weight=result$solution)
+  
+  return(df)
+}
+
+
+rungroup_par <- function(ugroup.in, targets_use, maxiter=10){
+  a <- proc.time()
+  
+  # set up the targets
+  priority1_vars <- c("wt", "c00100", "e00200", "e00300", "e00400", "e01500", "p23250", "taxbc", "c62100", "c09600")
+  targ_samp <- targets_use %>%
+    filter(ugroup==ugroup.in) %>%
+    mutate(priority_weight=case_when(vname %in% priority1_vars ~ 100,
+                                     TRUE ~ 1))
+  # set up the data subset
+  syn_samp <- estack_tc_groups %>% 
+    filter(ftype=="syn", ugroup==ugroup.in) %>% 
+    ungroup
+  
+  # set up the constraint coefficients
+  ccoef_samp <- ccoef %>%
+    filter(ftype=="syn", ugroup==ugroup.in)
+  
+  # set up the inputs list
+  get_named_vec <- function(vec, vec_names, target_names){
+    names(vec) <- vec_names
+    return(vec[target_names])
+  }
+  
+  target_names <- intersect(targ_samp$good_constraint, names(ccoef_samp))
+  
+  target_vec <- get_named_vec(vec = targ_samp$target,
+                              vec_names = targ_samp$good_constraint,
+                              target_names = target_names)
+  
+  priority_weights <- get_named_vec(vec = targ_samp$priority_weight,
+                                    vec_names = targ_samp$good_constraint,
+                                    target_names = target_names)
+  
+  fileval_vec <- get_named_vec(vec = targ_samp$file_value,
+                               vec_names = targ_samp$good_constraint,
+                               target_names = target_names)
+  
+  scale_vec <- ifelse(target_vec==0, fileval_vec, target_vec)
+  
+  inputs <- list()
+  inputs$target_names <- target_names
+  inputs$target_vec <- target_vec
+  inputs$priority_weights <- priority_weights
+  inputs$scale_vec <- scale_vec
+  inputs$ccoef <- ccoef_samp
+  
+  # starting point and bounds on the weights
+  wts <- syn_samp$s006 / 6
+  xlb <- rep(1, length(wts))
+  x0 <- pmax(wts, 1)
+  xub <- pmax(wts*2, 10e3)
+  
+  # call the optimizer
+  opts <- list("algorithm"="NLOPT_LD_MMA",
+               "xtol_rel"=1.0e-8,
+               "maxeval"=maxiter)
+  result <- nloptr(x0, 
+                   eval_f=obj_wfs,
+                   eval_grad_f = grad_wfs,
+                   lb = xlb, ub = xub,
+                   opts = opts, inputs=inputs)
+  
+  outputs <- list()
+  outputs$inputs <- inputs
+  outputs$result <- result
+  
+  b <- proc.time()
+  # print(b - a)
+  outputs$elapsed <- b - a
+  
+  outdir <- "D:/tax_data/djb_presentation/opt_output/"
+  fname <- paste0("g_", ugroup.in, ".rds")
+  saveRDS(outputs, paste0(outdir, fname))
+  
+  df <- tibble(RECID=syn_samp$RECID, ugroup=ugroup.in, weight=result$solution)
+  
+  return(df)
+}
+
+ccoef_group <- opt_pre %>% filter(ugroup==6)
+wt0 <- ccoef_group$wt0
+glimpse(ccoef_group)
+
+
+rungroup_mdplyr <- function(ccoef_group, targets_use, maxiter=10){
+  # df is a piece of the big data frame
+  ugroup.in <- ccoef_group$ugroup[1]
+  wt0 <- ccoef_group$wt0
+  
+  a <- proc.time()
+  
+  # set up the targets
+  priority1_vars <- c("wt", 
+                      "c00100", "e00200", "e00300", "e00400", "e00600",
+                      "e01500", "e02000", "e02500", "p23250",
+                      "e18400",
+                      "e04600", "e04800",
+                      "taxbc", "c62100", "c09600")
+  targ_group <- targets_use %>%
+    filter(ugroup==ugroup.in) %>%
+    mutate(priority_weight=case_when(vname %in% priority1_vars ~ 100,
+                                     TRUE ~ 1))
+  
+  # constraint coefficients are ccoef_group
+
+  # set up the inputs list
+  get_named_vec <- function(vec, vec_names, target_names){
+    names(vec) <- vec_names
+    return(vec[target_names])
+  }
+  
+  target_names <- intersect(targ_group$good_constraint, names(ccoef_group))
+  
+  target_vec <- get_named_vec(vec = targ_group$target,
+                              vec_names = targ_group$good_constraint,
+                              target_names = target_names)
+  
+  priority_weights <- get_named_vec(vec = targ_group$priority_weight,
+                                    vec_names = targ_group$good_constraint,
+                                    target_names = target_names)
+  
+  fileval_vec <- get_named_vec(vec = targ_group$file_value,
+                               vec_names = targ_group$good_constraint,
+                               target_names = target_names)
+  
+  scale_vec <- ifelse(target_vec==0, fileval_vec, target_vec)
+  
+  inputs <- list()
+  inputs$target_names <- target_names
+  inputs$target_vec <- target_vec
+  inputs$priority_weights <- priority_weights
+  inputs$scale_vec <- scale_vec
+  inputs$ccoef <- ccoef_group %>% ungroup # UNGROUPING IS IMPORTANT!!
+  
+  # starting point and bounds on the weights
+  # wts <- syn_group$s006 / 6
+  xlb <- rep(1, length(wt0))
+  x0 <- pmax(wt0, 1)
+  xub <- pmax(wt0*2, 10e3)
+  
+  # call the optimizer
+  opts <- list("algorithm"="NLOPT_LD_MMA",
+               "xtol_rel"=1.0e-8,
+               "maxeval"=maxiter)
+  result <- nloptr(x0, 
+                   eval_f=obj_wfs,
+                   eval_grad_f = grad_wfs,
+                   lb = xlb, ub = xub,
+                   opts = opts, inputs=inputs)
+  
+  outputs <- list()
+  outputs$inputs <- inputs
+  outputs$result <- result
+  
+  b <- proc.time()
+  # print(b - a)
+  outputs$elapsed <- b - a
+  
+  outdir <- "D:/tax_data/djb_presentation/opt_output/"
+  fname <- paste0("g_", ugroup.in, ".rds")
+  saveRDS(outputs, paste0(outdir, fname))
+  
+  df <- tibble(RECID=ccoef_group$RECID, ugroup=ugroup.in, weight=result$solution)
+  
+  return(df)
+}
+
 
 #****************************************************************************************************
 #                mma wfs functions ####
 #****************************************************************************************************
-eval_f_wtfs <- function(w, inputs) {
+# see the OLD functions below for documentation
+obj_wfs <- function(w, inputs){
+  constraints_vec <- calc_constraints(w, inputs$ccoef, inputs$target_names)
+  diff <- constraints_vec / inputs$scale_vec - inputs$target_vec / inputs$scale_vec
+  obj <- sum(diff^2 * inputs$priority_weights)
+  return(obj)
+}
+
+
+grad_wfs <- function(w, inputs){
+  # gradient of objective function - a vector length w
+  # giving the partial derivatives of obj wrt each w[i]
+  ccmat <- as.matrix(inputs$ccoef[, inputs$target_names])
+  calc_vec <- colSums(ccmat * w) # 1 sum per constraint
+  grad_vec_part <- {2 * inputs$priority_weights * (calc_vec - inputs$target_vec)} / {inputs$scale_vec^2}
+  grad_vec <- (ccmat %*% grad_vec_part)[, 1]
+  return(grad_vec)
+}
+
+
+OLD_eval_f_wtfs <- function(w, inputs) {
   # objective function - evaluates to a single number
   
   # w is the vector of weights computed in this iteration
@@ -101,7 +373,7 @@ eval_f_wtfs <- function(w, inputs) {
 }
 
 
-eval_grad_f_wtfs <- function(w, inputs){
+OLD_eval_grad_f_wtfs <- function(w, inputs){
   # gradient of objective function - a vector length w
   # giving the partial derivatives of obj wrt each w[i]
   

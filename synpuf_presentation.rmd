@@ -2226,6 +2226,93 @@ b - a  # it can easily take 5-10 minutes depending on the size of the input file
 
 
 
+
+```{r run_taxcalc_on_puf}
+pufpath <- "C:/Users/donbo/Dropbox/IRS_pubuse_2011/puf.csv"
+notpufpath <- paste0(taxout, "notpuf.csv")
+notpufpathxyr <- paste0(taxout, "notpufxyr.csv")
+
+# write notpuf
+tmp <- read_csv(pufpath, col_types = cols(.default= col_double()), n_max=-1)
+tmp %>% write_csv(notpufpath)
+tmp %>% select(-FLPDYR) %>% write_csv(notpufpathxyr)
+
+
+outpath2013 <- paste0(taxout, "puf-13-#-#-#.csv")
+# outpath2013 <- paste0(taxout, "notpuf-13-#-#-#.csv")
+# outpath2013 <- paste0(taxout, "notpuf-13-#-#-#.csv")
+outpath2018 <- paste0(taxout, "puf-18-#-#-#.csv")
+
+cmd1 <- "C:/ProgramData/Anaconda3/Scripts/tc"
+args <- c(notpufpathxyr, 2013,
+          "--dump",
+          "--outdir", taxout)
+cmd1
+args
+
+a <- proc.time()
+system2(cmd1, args) # CAUTION: this will overwrite any existing output file that had same input filename!
+# consider system2
+b <- proc.time()
+b - a  # it can easily take 5-10 minutes depending on the size of the input file
+
+df1 <- read_csv(pufpath, col_types = cols(.default= col_double()), n_max=-1)
+anyDuplicated(df1$RECID)
+length(unique((df1$RECID)))
+
+df2 <- read_csv(outpath2013, col_types = cols(.default= col_double()), n_max=-1)
+# df2i <- read_csv(outpath, col_types = cols(.default= col_integer()), n_max=-1)
+glimpse(df1)
+glimpse(df2)
+nrow(df1); nrow(df2)
+ns(df1)
+ns(df2)
+
+# compare wages
+check <- df1 %>% select(RECID_old=RECID, e00200_old=e00200, s006_old=s006) %>%
+  mutate(s006_old=s006_old / 100) %>%
+  cbind(df2 %>% select(RECID, e00200, s006)) %>%
+  mutate(one=1,
+         wwage_old=e00200_old * s006_old, 
+         wwage=e00200 * s006,
+         wwage_new=e00200 * s006_old,
+         diff=wwage - wwage_old,
+         diff_new=wwage_new - wwage_old,
+         wratio=e00200 / e00200_old,
+         wtratio=s006 / s006_old) 
+quantile(check$wtratio)
+
+check %>%
+  summarise_at(vars(s006_old, s006, wwage_old, wwage, wwage_new, diff, diff_new), list(~sum(.))) %>%
+  kable(format="rst", digits=1, format.args = list(big.mark=","))
+
+sum(df1$s006 / 100) / 1e3; sum(df2$s006) / 1e3
+median(df1$e00200); median(df2$e00200)
+
+quantile(df1$e00200); quantile(df2$e00200)
+
+sum(df1$s006/100 * df1$e00200) / 1e9
+sum(df2$s006 * df2$e00200) / 1e9
+
+sum(df2$s006 * df2$taxbc) / 1e9
+sum(df2$s006 * df2$c00100) / 1e9
+sum(df2i$s006 * df2i$c00100) / 1e9
+
+df12 <- df1 %>% 
+  select(RECID_old=RECID, s006_old=s006) %>%
+  cbind(df2 %>% select(RECID, s006, c00100, e00400, c62100, taxbc, c09600, c05800))
+glimpse(df12)
+
+vars <- c("c00100", "e00400", "c62100", "taxbc", "c09600", "c05800")
+df12 %>% 
+  mutate(one=1) %>%
+  # summarise_at(vars(-c(RECID_old, RECID, s006_old, s006)), list(~sum(s006_old / 100 * .) / 1e6)) %>%
+  summarise_at(vars(-c(RECID_old, RECID, s006_old, s006)), list(~sum(s006 * .) / 1e6)) %>%
+  kable(format="rst", digits=1, format.args = list(big.mark=","))
+
+
+```
+
 # compare many files selected variables
 ```{r}
 # convert all variables to lower case
@@ -2409,6 +2496,162 @@ stack %>%
   arrange(name, ygroup)
 
 
+
+```
+
+
+
+# Compare re-reweighted enhanced files
+```{r}
+slgfdir <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/" # enhanced files are stored here
+taxout <- "D:/tax_data/" # Tax-Calculator results go here
+
+esr_path <- paste0(slgfdir, "estack_rotten.csv")
+esrtc2013_path <- paste0(taxout, "estack_rotten-13-#-#-#.csv")
+esrtc2018_path <- paste0(taxout, "estack_rotten-18-#-#-#.csv")
+# estc_path <- "D:/tax_data/djb_presentation/"
+
+estack_rotten <- read_csv(esr_path,
+                          col_types = cols(.default= col_double(), ftype=col_character()), n_max=-1)
+# estack_tc <- readRDS(estc_path)
+
+estack_tc2013 <- read_csv(esrtc2013_path,
+                          col_types = cols(.default= col_double()), n_max=-1)
+
+estack_tc2018 <- read_csv(esrtc2018_path,
+                          col_types = cols(.default= col_double()), n_max=-1)
+
+
+opt_path <- paste0("D:/tax_data/djb_presentation/wts_opt.rds")
+opt_wts <- readRDS(opt_path)
+nrow(opt_wts)
+opt_wts
+
+# inspect
+glimpse(estack_rotten) # 1,011,340
+glimpse(estack_tc2013) # 1,011,340
+count(estack_rotten, ftype)
+ns(estack_rotten)
+ns(estack_tc2013)
+
+# combine
+check <- estack_rotten %>% 
+  select(ftype, RECID, RECID_original, s006) %>%
+  left_join(estack_tc2018 %>% select(RECID, c00100, e00400, c62100, taxbc, c09600, c05800), by="RECID") %>%
+  left_join(opt_wts %>% select(RECID, weight) %>% mutate(ftype="syn")) %>%
+  mutate(weight=ifelse(ftype=="puf", s006 / 100, weight))
+glimpse(check)
+ns(check)
+count(check, ftype, FLPDYR)
+
+vars <- c("c00100", "e00400", "c62100", "taxbc", "c09600", "c05800")
+check %>% 
+  select(ftype, weight, vars) %>%
+  group_by(ftype) %>%
+  summarise_at(vars(vars), list(~sum(weight * .) / 1e9)) %>%
+  pivot_longer(vars, names_to="vname", values_to = "value") %>%
+  pivot_wider(names_from=ftype, values_from=value) %>%
+  mutate(diff=syn - puf, pdiff=diff / puf * 100) %>%
+  kable(format="rst", digits=1, format.args = list(big.mark=","))
+
+
+```
+
+
+# THIS IS IT -- tax reforms with my weights
+```{r get_data_fortc}
+
+slgfdir <- "C:/Users/donbo/Dropbox/SLGF/taxdata_synpuf/" # enhanced files are stored here
+taxref <- "D:/tax_data/reforms/" # Tax-Calculator results go here
+
+esr_path <- paste0(slgfdir, "estack_rotten.csv")
+# esrtc2013_path <- paste0(taxout, "estack_rotten-13-#-#-#.csv")
+# esrtc2018_path <- paste0(taxout, "estack_rotten-18-#-#-#.csv")
+# estc_path <- "D:/tax_data/djb_presentation/"
+
+# estack_rotten is epuf and esyn from Yimeng, with:
+#    ftype added
+#    FLPDYR removed
+#    RECID, RECID_original fix
+estack_rotten <- read_csv(esr_path,
+                          col_types = cols(.default= col_double(), ftype=col_character()), n_max=-1)
+# count(estack_rotten, ftype, agi_bin) # 0-18
+# count(estack_rotten, ftype)
+# ns(estack_rotten)
+# estack_tc <- readRDS(estc_path)
+
+# estack_tc2013 <- read_csv(esrtc2013_path,
+#                           col_types = cols(.default= col_double()), n_max=-1)
+# 
+# estack_tc2018 <- read_csv(esrtc2018_path,
+#                           col_types = cols(.default= col_double()), n_max=-1)
+
+# apply growfactors ----
+
+
+```
+
+
+```{r run_reforms}
+# Tax-Calculator user guide:
+# https://pslmodels.github.io/Tax-Calculator/uguide.html
+
+# Here is the tc CLI usage: 
+# tc INPUT TAXYEAR [--help]
+# [--baseline BASELINE] [--reform REFORM] [--assump  ASSUMP]
+# [--exact] [--tables] [--graphs]
+# [--dump] [--dvars DVARS] [--sqldb] [--outdir OUTDIR]
+# [--test] [--version]
+
+tc_cmd <- function(inpath, year, outdir, taxplan="baseline", plandir=NULL){
+  cmd <- "C:/ProgramData/Anaconda3/Scripts/tc"
+  args_base <- c(shQuote(inpath), year)
+  args_reform <- NULL
+  if(taxplan != "baseline") args_reform <- c("--reform", shQuote(paste0(plandir, taxplan)))
+  args_dump <- c("--dump", "--outdir", shQuote(outdir))
+  args <- c(args_base, args_reform, args_dump)
+  return(list(cmd=cmd, args=args))
+}
+
+plandir <- "C:/Users/donbo/Dropbox/RPrograms PC/OSPC/syndata_presentation/tax_plans/"
+# reforms <- c("baseline", "reform4.json")
+reforms <- c("Trump2017v2.json")
+
+# tc_cmd(esr_path, 2017, taxref)
+# tc_cmd(esr_path, 2017, taxref, reforms[1])
+# tc_cmd(esr_path, 2017, taxref, reforms[2])
+
+tc_cmd(esr_path, 2017, taxref, reforms[1], plandir)
+
+# reform <- reforms[1]
+# reforms <- reforms[2]
+
+t1a <- proc.time()
+for(reform in reforms){
+  t2a <- proc.time()
+  print(reform)
+  cmdlist <- tc_cmd(esr_path, 2017, taxref, reform, plandir)
+  print(cmdlist)
+  system2(cmdlist$cmd, cmdlist$args) # CAUTION: this will overwrite any existing output file that had same input filename!
+  t2b <- proc.time()
+  print(t2b - t2a)
+}
+t1b <- proc.time()
+t1b - t1a  # it can easily take 5-10 minutes per reform depending on the size of the input file
+
+
+```
+
+
+```{r analyze_results}
+# estack_rotten <- read_csv(esr_path,
+#                           col_types = cols(.default= col_double(), ftype=col_character()), n_max=-1)
+
+# get 2011ish weights from scratch
+opt_path <- paste0("D:/tax_data/djb_presentation/wts_opt.rds")
+opt_wts <- readRDS(opt_path)
+nrow(opt_wts)
+opt_wts
 
 ```
 

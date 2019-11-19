@@ -15,6 +15,8 @@ library("hms") # hms, for times
 library("lubridate") # lubridate, for date/times
 library("vctrs")
 
+library("readxl")
+
 library("btools")
 
 # tables
