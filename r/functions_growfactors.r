@@ -1,57 +1,82 @@
 
-# apply growfactors for year to data frame df
-# arguments:
-#   year  integer
-#   df    data frame
-# return:
-#   df as grown
-# note that e00900p, e00900s, and e02000 have different growfactors for positive and negative amounts
-# and that therefore e00900 will have to be recomputed after growing prime and spouse separately
+grow_df <- function(df, year_grow){
+  # apply growfactors for year to data frame df
+  # arguments:
+  #   year  integer
+  #   df    data frame
+  # return:
+  #   df_grown  the df as grown
+  # note that e00900p, e00900s, and e02000 have different growfactors for positive and negative amounts
+  # and that therefore e00900 will have to be recomputed after growing prime and spouse separately
+  
+  # This is based on the python code from Tax-Calculator function _extrapolate in records.py,
+  # which is copied below.
+  
+  # df <- estack_rotten
+  # year_grow <- 2018
+  
+  # C:\ProgramData\Anaconda3\Lib\site-packages\taxcalc\growfactors.csv is where my growfactors are
+  growpath <- "C:/ProgramData/Anaconda3/Lib/site-packages/taxcalc/growfactors.csv"
+  gflink_path <- "C:/Users/donbo/Dropbox/RPrograms PC/OSPC/syndata_presentation/data/apply_growfactors.xlsm"
+  
+  gf <- read_csv(growpath) # growfactors available
+  gflink <- read_excel(gflink_path, sheet="growfactors_link") %>%
+    filter(!is.na(vname)) # growfactors that the code looks for
+  
+  # check: are any gfactors in one file but not the other?
+  # ns(gf)
+  # setdiff(names(gf), unique(gflink$gfname)) # ACPIM is available but not used
+  # setdiff(unique(gflink$gfname), names(gf)) # all looked-for growfactors are available (are in gf)
+  
+  gflong <- gflink %>%
+    left_join(gf %>% rename(year=YEAR) %>% pivot_longer(-year, names_to="gfname", values_to="gfactor"))
+  # check
+  # gflong %>% filter(year==2018, vname=="e00900s")
+  
+  gfwide <- gflong %>%
+    mutate(applyto=paste0("gf_", applyto)) %>%
+    select(-gfname) %>%
+    pivot_wider(names_from=applyto, values_from=gfactor)
+  # check
+  # gfwide %>% filter(year==2018, vname %in% c("e00400", "e00900", "e00900p", "e00900s", "e02000"))
+  
+  growvars <- intersect(names(df), unique(gflong$vname))
+  dontgrowvars <- setdiff(names(df), growvars)
+  
+  # look:
+  # dontgrowvars %>% sort
+  # gfwide %>% filter(year==year_grow, vname %in% growvars)
+  
+  vname_grow <- "e00200"
+  vname_grow <- "e00900p"
+  
+  growvec <- function(vname_grow, year_grow, gfwide, df){
+    growdf <- gfwide %>%
+      filter(year==year_grow, vname==vname_grow)
+    gf_all <- growdf$gf_all
+    gf_ge0 <- growdf$gf_ge0
+    gf_lt0 <- growdf$gf_lt0
+    # gf_all; gf_ge0; gf_lt0
+    
+    var_vec <- df[, vname_grow]
+    if(!is.na(gf_all)) gf_vec <- rep(gf_all, length(var_vec)) else {
+      gf_vec <- ifelse(var_vec >= 0, gf_ge0, gf_lt0)}
+    var_grown <- var_vec * gf_vec
+    return(var_grown)
+  }  
+  
+  df_grown <- df
+  for(var in growvars) df_grown[, var] <- growvec(var, year_grow, gfwide, df)
+  df_grown$e00900 <- df_grown$e00900p + df_grown$e00900s
+  # check: 
+  # vars <- c("e00200", "e00900p", "e00900s", "e00900", "e02000")
+  # glimpse(df %>% select(vars))
+  # glimpse(df_grown %>% select(vars))
+  return(df_grown)
+}
 
-# This is based on the python code from Tax-Calculator function _extrapolate in records.py,
-# which is copied below.
-
-
-# C:\ProgramData\Anaconda3\Lib\site-packages\taxcalc\growfactors.csv is where my growfactors are
-growpath <- "C:/ProgramData/Anaconda3/Lib/site-packages/taxcalc/growfactors.csv"
-gflink_path <- "C:/Users/donbo/Dropbox/RPrograms PC/OSPC/syndata_presentation/data/apply_growfactors.xlsm"
-
-gf <- read_csv(growpath)
-gflink <- read_excel(gflink_path, sheet="growfactors_link") %>%
-  filter(!is.na(vname))
-
-gflong <- gflink %>%
-  left_join(gf %>% rename(year=YEAR) %>% pivot_longer(-year, names_to="gfname", values_to="gfactor"))
-
-df <- estack_rotten
-year_grow <- 2018
-
-growvars <- intersect(names(df), unique(gflong$vname))
-dontgrowvars <- setdiff(names(df), growvars)
-dontgrowvars %>% sort
-gflong %>% filter(year==year_grow, vname %in% growvars)
-
-
-
-
-#> ns(estack_rotten)
-# [1] "age_head"           "age_spouse"         "agi_bin"            "cmbtp"              "DSI"                "e00200"             "e00200p"           
-# [8] "e00200s"            "e00300"             "e00400"             "e00600"             "e00650"             "e00700"             "e00800"            
-# [15] "e00900"             "e00900p"            "e00900s"            "e01100"             "e01200"             "e01400"             "e01500"            
-# [22] "e01700"             "e02000"             "e02100"             "e02100p"            "e02100s"            "e02300"             "e02400"            
-# [29] "e03150"             "e03210"             "e03220"             "e03230"             "e03240"             "e03270"             "e03290"            
-# [36] "e03300"             "e03400"             "e03500"             "e07240"             "e07260"             "e07300"             "e07400"            
-# [43] "e07600"             "e09700"             "e09800"             "e09900"             "e11200"             "e17500"             "e18400"            
-# [50] "e18500"             "e19200"             "e19800"             "e20100"             "e20400"             "e24515"             "e24518"            
-# [57] "e26270"             "e27200"             "e32800"             "e58990"             "e62900"             "e87521"             "e87530"            
-# [64] "EIC"                "elderly_dependents" "f2441"              "f6251"              "fips"               "ftype"              "g20500"            
-# [71] "k1bx14p"            "k1bx14s"            "MARS"               "MIDR"               "n1820"              "n21"                "n24"               
-# [78] "nu05"               "nu13"               "nu18"               "p08000"             "p22250"             "p23250"             "RECID"             
-# [85] "RECID_original"     "s006"               "XTOT"              
-
-gf
-
-# wagevars <- c("e00200", "e00200p", "e00200s", "e01500", "e01700")
+# tmp <- grow_df(estack_rotten, 2018)
+# vars <- c("e00900p", "e00900s", "e00900"); cbind(estack_rotten[, vars], tmp[, vars]) %>% ht
 
 # def _extrapolate(self, year):
 #   """

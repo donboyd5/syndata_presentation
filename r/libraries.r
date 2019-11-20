@@ -24,7 +24,7 @@ library("knitr")
 library("kableExtra")
 
 library("flextable")
-# library(officer)
+library("officer")
 
 # graphics
 library("grDevices")
